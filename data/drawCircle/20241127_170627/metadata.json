@@ -1,0 +1,15 @@
+{
+  "scenario" : "Unspecified",
+  "deviceModel" : "iPhone",
+  "systemVersion" : "18.0.1",
+  "rightForceDataSize" : 192,
+  "angleDataSize" : 713,
+  "appVersion" : "1.1",
+  "description" : "",
+  "position" : "Right",
+  "ARDataSize" : 713,
+  "fileUUID" : "20EE1BBB-5DBC-42E8-A882-8E15285ABF94",
+  "createTime" : "20241127_09:06:52",
+  "leftForceDataSize" : 192,
+  "systemName" : "iOS"
+}
