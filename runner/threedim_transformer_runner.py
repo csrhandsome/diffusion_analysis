@@ -2,6 +2,7 @@ from data_analysis.dataset.magiclaw_dataset import *
 from diffusion.model.cnn_based import *
 from util.plot_visualiazer_util import *
 # 2024.11.4 真正的action应该包括了位姿数据加上夹爪的开合数据  那么用来预测的数据应该为?
+
 def threedim_state_create_model():
     input_dim=6+1# 位姿数据+夹爪数据 维度要和action一样，因为本质上最后是在action的图像上进行模糊和清晰 
     global_cond_dim=2*6# 全局条件维度，这里是位姿数据的维度

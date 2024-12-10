@@ -1,6 +1,30 @@
 import numpy as np
 import scipy.spatial.transform as st
+from scipy.spatial.transform import Rotation
 
+def euler_to_quaternion(euler: np.ndarray) -> np.ndarray:
+    """
+    将欧拉角（roll, pitch, yaw）转换为四元数。
+    Args:
+        euler (np.ndarray): 欧拉角 [roll, pitch, yaw]，形状 (3,)。
+
+    Returns:
+        np.ndarray: 四元数 [x, y, z, w]，形状 (4,)。
+    """
+    roll, pitch, yaw = euler
+    cy = np.cos(yaw * 0.5)
+    sy = np.sin(yaw * 0.5)
+    cp = np.cos(pitch * 0.5)
+    sp = np.sin(pitch * 0.5)
+    cr = np.cos(roll * 0.5)
+    sr = np.sin(roll * 0.5)
+
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+    return np.array([x, y, z, w])
+    
 def pos_rot_to_mat(pos, rot):
     shape = pos.shape[:-1]
     mat = np.zeros(shape + (4,4), dtype=pos.dtype)

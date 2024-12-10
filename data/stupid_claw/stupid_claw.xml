@@ -1,0 +1,47 @@
+<mujoco model="stupid_claw">
+    <compiler angle="radian" eulerseq="XYZ" />
+    <!-- 添加option标签来关闭重力 -->
+    <option gravity="0 0 0"/>
+    <asset>
+    <!-- 修改 mesh 名称为英文，并确保文件路径正确 -->
+    <mesh name="leftclaw" file="meshes/left_claw.stl" scale="0.001 0.001 0.001" />
+
+    <mesh name="rightclaw" file="meshes/right_claw.stl" scale="0.001 0.001 0.001" />
+
+    <mesh name="base" file="meshes/base.stl" scale="0.001 0.001 0.001" />
+    <!-- 定义纹理和材质 -->
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+        markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    </asset>
+
+    <worldbody>
+    <!-- 定义光源 -->
+    <light directional="true" pos="-0.5 0.5 3" dir="0 0 -1" />
+    <!-- 地面定义：水平平面，法向量 (0, 0, 1)，位于 z=0，使用 groundplane 材质 -->
+    <geom name="floor" type="plane" size="2 2 0.1" material="groundplane" conaffinity="1" contype="1" condim="3"/>
+        <!-- leftclaw和rightclaw是base的子体，它们的pos是相对于base的位置。如果你想整体上移，应该只需要修改base的z坐标，子体会自动跟随移动 -->
+        <body name="base" pos="0 0 0.2" euler="-0.523598775598299 -2.2785390667798937e-16 -3.1397999371395543e-15">
+            <!-- 添加freejoint,freejoint对于位姿提供了7个自由度,对于速度控制提供了6个自由度（3个平移和3个旋转），这样你就可以在空间中自由移动和旋转整个夹爪结构 -->
+            <freejoint name="base_joint"/>
+            <geom name="base_geom" type="mesh" mesh="base" pos="0 0 0" euler="0 0 0" />
+            <inertial mass="3.269907041952238" pos="0.045000000000000005 -0.02000000000000001 -0.02094710018992732" fullinertia="0.0025874418267727043 0.0031408355591143527 0.0038609807742938833 -1.4090668817825036e-18 -1.155605703797015e-18 6.505213034913027e-19" />
+            <body name="leftclaw" pos="0.1862008929638116 -0.07993679244437184 -0.18885737478952788" euler="3.141592653589793 1.4626568336941197 3.1415926535897767">
+                <joint name="rotate_joint_1" type="hinge" axis="-0.10792884972830213 2.064379030263944e-14 0.9941586208429363" pos="-0.16743029054881559 0.03993688254317258 -0.1149428765558054" />
+                <geom name="leftclaw_geom" type="mesh" mesh="leftclaw" pos="0 0 0" euler="0 0 0" />
+                <inertial mass="0.2682109537904417" pos="-0.22369672195460727 0.015015422054443006 -0.16503978595574256" fullinertia="0.0002393085223677437 0.0004704853833755494 0.0003277113056793908 -4.115662927234129e-05 -1.3248538640027762e-05 -4.224271645599436e-06" />
+            </body>
+            <body name="rightclaw" pos="0.18505199592155328 -0.0059609249654523615 -0.202866512659994" euler="3.1415926535897927 1.462656833694109 3.1415926535897793">
+                <joint name="rotate_joint_2" type="hinge" axis="-0.10792884972831254 1.5887408797254283e-14 0.9941586208429348" pos="-0.1717679903654788 0.0059610010767488925 -0.2047869557970937" />
+                <geom name="rightclaw_geom" type="mesh" mesh="rightclaw" pos="0 0 0" euler="0 0 0" />
+                <inertial mass="0.2682109537904417" pos="-0.22369672195460677 0.015015422054442978 -0.16503978595574245" fullinertia="0.00023930852236773005 0.0004704853833755772 0.00032771130567940947 -4.115662927233453e-05 -1.324853864002696e-05 -4.224271645598921e-06" />
+            </body>
+        </body>
+    </worldbody>
+    <!-- 添加执行器定义 -->
+    <actuator>
+        <motor joint="rotate_joint_1" name="rotate_joint_1" ctrlrange="-1 1"/>
+        <motor joint="rotate_joint_2" name="rotate_joint_2" ctrlrange="-1 1"/>
+    </actuator>
+</mujoco>
