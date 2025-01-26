@@ -1,0 +1,59 @@
+# config.yaml
+
+# 模型配置
+model:
+  output_dim: 531  # 6+1+6+6+512
+  input_dim: 7     # 6+1
+  hidden_size: 1152
+  depth: 28
+  num_heads: 16
+  horizon: 8
+  max_lang_cond_len: 77
+  img_cond_len: 512
+  img_pos_embed_config:
+    vision: 512
+
+# 数据维度配置
+data:
+  vision_feature_dim: 512
+  force_feature_dim: 1
+  
+  # 状态维度
+  twodim_state_dim: 5
+  threedim_state_dim: 520  # 6+1+1+512
+  
+  # 动作维度
+  twodim_action_dim: 2
+  threedim_action_dim: 8   # 6+1+1
+
+# 时间步长配置
+horizon:
+  state_horizon: 2
+  action_horizon: 8
+  pred_horizon: 8
+
+# 数据集配置
+dataset:
+  data_sum: 25650
+  train_num: 100
+  diffusion_num: 100
+  lowdim_obs_dim: 2
+  obs_dim: 514  # vision_feature_dim + lowdim_obs_dim
+  zip_data_path: "data/pusht_cchi_v7_replay.zarr.zip"
+
+# 训练配置
+training:
+  device: "cuda"
+  dtype: "float32"
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 0.0
+  warmup_steps: 1000
+  total_steps: 100000
+  
+# 扩散模型配置
+diffusion:
+  num_diffusion_steps: 1000
+  noise_schedule: "cosine"
+  prediction_type: "epsilon"
+  loss_type: "l2"

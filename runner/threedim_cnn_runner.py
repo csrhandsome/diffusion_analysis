@@ -1,20 +1,15 @@
 from data_analysis.dataset.magiclaw_dataset import *
-from diffusion.model.cnn_based import *
+from diffusion.model.diffusion.cnn_based import *
 from util.plot_visualiazer_util import *
 from diffusion.simulation.control_gripper import control_gripper
 from diffusion.simulation.gripper_env import GripperEnv
 from util.mujoco_util import interpolate_actions
 import time
+from datetime import datetime
 # 2024.11.4 真正的action应该包括了位姿数据加上夹爪的开合数据  那么用来预测的数据应该为?
 def threedim_state_and_vision_create_model():
     model = ConditionalUnet1D(input_dim=input_dim, global_cond_dim=global_cond_dim)
     device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    '''noise = torch.randn((1, 8, 2))#观测两个现有的时间维度,预测8个时间维度
-    state=torch.zeros((1,2,5))
-    diffusion_iter=torch.zeros((1,))
-    output=model(noise,diffusion_iter,state.flatten(start_dim=1))
-    #print(f'output is noise is {output}')
-    denoised=noise-output'''# 演示
     num_diffuison=100
     noise_scheduler=DDPMScheduler(num_train_timesteps=num_diffuison,
                                   clip_sample=True,
@@ -37,18 +32,18 @@ def threedim_state_and_vision_train_model():
             epoch_loss=list()
             with tqdm(dataloader,desc='Batch', leave=False) as tqdm_batch:#leave=False 进度条不leave,一直在原地刷新
                 for batch in tqdm_batch:#batch为batch_size的个sample_sequence
-                    epoch_state=batch['state'].to(device).detach().float()#epoch_state is torch.Size([4, 2, 6])
-                    epoch_action=batch['action'].to(device).detach().float()#epoch_action is torch.Size([4, 8, 7])  
+                    epoch_state=batch['state'].to(device).detach().float()
+                    epoch_action=batch['action'].to(device).detach().float() 
                     '''print(f'epoch_state is {epoch_state.shape}')
                     print(f'epoch_action is {epoch_action.shape}')'''
                     Batch_size = epoch_state.shape[0]
-                    # observation as FiLM conditioning
+                    # FiLM conditioning
                     # (B, obs_horizon, obs_dim)
                     state_cond = epoch_state[:,:state_horizon,:]#把一个时间步的提取出来，然后flatten
                     # (B, obs_horizon * obs_dim)
                     state_cond = state_cond.flatten(start_dim=1)
 
-                    # 按照action形状生成的噪声
+                    # 按照action维度生成的噪声
                     noise = torch.randn(epoch_action.shape, device=device,dtype=torch.float32)
 
                     # 将每个数据点采样一个扩散迭代次数 范围为[0, num_train_timesteps-1]，维度为(B,)
@@ -56,15 +51,15 @@ def threedim_state_and_vision_train_model():
                         0, noise_scheduler.config.num_train_timesteps,
                         (Batch_size,), device=device
                     ).long()
-                    # 根据每次扩散迭代中的噪声幅度向原始图像添加噪声，使其变模糊
-                    # （这是前向扩散过程）
+                    # 根据每次扩散迭代中的噪声幅度向action添加噪声，使其变模糊（这是前向扩散过程）
                     noisy_actions = noise_scheduler.add_noise(
                         epoch_action, noise, timesteps)
-                    # 噪声残差预测值
+                    # 模型预测噪声残差预测值,模型输出的仍然是action的维度
                     noise_pred = model(
                         noisy_actions, timesteps, global_cond=state_cond)# output=model(noise,diffusion_iter,obs.flatten(start_dim=1))
+                         
                     # 以下添加了损失函数，优化器，还有一个lr_scheduler大抵是优化器吧
-                    # L2 loss
+                    # 把model预测的噪声和随机生成的噪声进行一个mse计算(毕竟这俩确实维度相同)
                     loss = nn.functional.mse_loss(noise_pred, noise)
 
                     # optimize
@@ -119,8 +114,8 @@ def threedim_state_and_vision_test_model():
     optimizer.load_state_dict(model_dict['optimizer_state_dict'])
     noise_scheduler = DDPMScheduler.from_pretrained("noise_scheduler_state/scheduler_config.json")
 
-    # 开始仿真  
-    state=mydataset.initial_state
+    # -------simulation start-------
+    state=mydataset.initial_state# state就是cond，到时候真实环境情况下就选取显示的initial_state
     state_deque=collections.deque([state]*state_horizon,maxlen=state_horizon)
     done=False
     env=GripperEnv()
@@ -151,18 +146,27 @@ def threedim_state_and_vision_test_model():
             naction = naction.detach().to('cpu').numpy()#(1,8,7)
             # action shape is (B, pred_horizon, action_dim)
             naction = naction[0]
-            action_pred = unnormalize_data(naction, stats=mydataset.stats['action'])#预测的动作出来了，并且将其标准化
+            action_pred = unnormalize_data(naction, stats=mydataset.stats['action'])# 预测的动作出来了，并且将其标准化
 
             # action_hoizon长度的action
             start = input_dim - 1
             end = start + input_dim # 取出一个现有的state步长的动作
             action = action_pred[start:end,:]
+            data=dict()# 最后的action的输出
+            data['timestamp']=None
+            data['Pose']=None
+            data['Angle']=None
             for i in range(len(action)):  # action 的长度相当于是 start:end 的数量
                 current_action = action[i]  # (action_dim,)
                 print(f"执行动作 {step_idx + 1}: {current_action}")
                 pose = current_action[:6]
                 angle = current_action[-1]
-                
+                if data['Angle'] is None:
+                    data['Angle']=angle
+                    data['Pose']=pose
+                else:
+                    data['Angle']=np.concatenate((data['Angle'],angle))# 注意这里的语法：将要连接的数组放在一个列表中 shape:(473, 16)
+                    data['Pose']=np.concatenate(data['Pose'],pose)               
                 '''# 进行插值 看着更连续
                 # 获取当前位姿和开度
                 current_pose, _ = env.get_pose()
@@ -178,7 +182,7 @@ def threedim_state_and_vision_test_model():
                     if step_idx >= max_steps:
                         done = True
                         break# 如果要插值的话，值会更多，需要遍历插值后的动作序列，然后执行'''
-                control_gripper(env, pose, angle)
+                
                 step_idx += 1
                 pbar.update(1)
                 if step_idx >= max_steps:
@@ -188,8 +192,17 @@ def threedim_state_and_vision_test_model():
                 # 更新状态队列（假设执行后更新状态）
                 # state = 获取当前状态的逻辑
                 # state_deque.append(state)
+            freq=60
+            time_step=1/freq
+            timestamp=np.zeros(len(data['pose']))
+            for j in range(len(data['pose'])):
+                current_timestamp=time_step*j
+                timestamp[j]=current_timestamp
+            data['timestamp']=timestamp
+    # 进行仿真
+    control_gripper(env, data)
     # 手动关闭渲染器  
-    while env.viewer and env.viewer.is_running():
+    while env.viewer and env.viewer.is_running(): 
         env.render()
         time.sleep(0.01)
     # 仿真完成，关闭渲染器和环境

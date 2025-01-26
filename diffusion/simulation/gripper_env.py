@@ -4,7 +4,7 @@ import numpy as np
 from typing import Optional, Tuple, List, Dict
 import time
 from util.pose_transform_util import euler_to_quaternion
-
+from diffusion.simulation.pid_controler import PIDController
 class GripperEnv:
     def __init__(self, xml_path: str = "data/stupid_claw/stupid_claw.xml"):
         # 加载 Mujoco 模型
@@ -153,6 +153,46 @@ class GripperEnv:
         print(f"获取的位姿四元数: {quat}")
 
         return pos, quat
+
+
+    def apply_velocity_control(self, target_pose: np.ndarray, max_steps=1000):
+        """
+        使用速度控制实现平滑运动
+        target_pose: np.ndarray [x, y, z, roll, pitch, yaw]
+        """
+        if target_pose.shape != (6,):
+            raise ValueError("target_pose必须是6维数组 [x, y, z, roll, pitch, yaw]")
+
+        for step in range(max_steps):
+            # 获取当前位姿
+            current_pos, current_quat = self.get_pose()
+            current_euler = quaternion_to_euler(current_quat)
+            current_pose = np.concatenate([current_pos, current_euler])
+
+            # 计算速度指令
+            velocity_cmd = self.pid.compute(current_pose, target_pose, self.dt)
+            
+            # 限制最大速度
+            max_linear_vel = 1.0  # 最大线速度 (m/s)
+            max_angular_vel = 1.0  # 最大角速度 (rad/s)
+            velocity_cmd[:3] = np.clip(velocity_cmd[:3], -max_linear_vel, max_linear_vel)
+            velocity_cmd[3:] = np.clip(velocity_cmd[3:], -max_angular_vel, max_angular_vel)
+
+            # 设置关节速度
+            qvel_start_idx = self.model.jnt_dofadr[self.free_joint_id]
+            self.data.qvel[qvel_start_idx:qvel_start_idx+6] = velocity_cmd
+
+            # 执行仿真步进
+            self.step()
+            self.step_render()
+
+            # 检查是否达到目标位置
+            pos_error = np.linalg.norm(current_pos - target_pose[:3])
+            rot_error = np.linalg.norm(current_euler - target_pose[3:])
+            
+            if pos_error < 0.01 and rot_error < 0.05:  # 根据实际需求调整阈值
+                break
+
 
     def reset(self, initial_pose: Optional[np.ndarray] = None, initial_angle: Optional[float] = None) -> None:
         """

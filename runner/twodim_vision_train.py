@@ -1,6 +1,6 @@
 from data_analysis.dataset.demo_push_t_image_dataset import *
-from diffusion.model.cnn_based import *
-from diffusion.model.visionencoder import *
+from diffusion.model.diffusion.cnn_based import *
+from diffusion.model.vision.resnet_visionencoder import *
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 def twodim_vision_create_model():
     # construct ResNet18 encoder

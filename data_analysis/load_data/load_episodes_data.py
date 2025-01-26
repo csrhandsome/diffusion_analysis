@@ -26,5 +26,5 @@ def load_episodes_data(data):
         episode_ends = np.append(episode_ends, len(timestamps))
     data['episodes_ends']=episode_ends
     # 保存为CSV
-    np.savetxt('episode_ends.csv', episode_ends, delimiter=',', fmt='%f')
+    # np.savetxt('episode_ends.csv', episode_ends, delimiter=',', fmt='%f')
     return data

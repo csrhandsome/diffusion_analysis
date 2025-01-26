@@ -2,7 +2,7 @@ import os
 import cv2
 from util.pose_transform_util import *
 from torchvision import transforms
-from diffusion.model.visionencoder import *
+from diffusion.model.vision.resnet_visionencoder import *
 from data.global_data import *
 from pathlib import Path
 from data_analysis.load_data.load_depth_data import *

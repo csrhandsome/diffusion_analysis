@@ -63,9 +63,10 @@ class MagiClawDataset(Dataset):
         # print(f'nsamppe["action"] is {nsample["action"]}')
         return nsample
         
-
 def create_MagiClaw_dataloader():                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-    dataset=MagiClawDataset(pred_horizon=pred_horizon,obs_horizon=state_horizon,action_horizon=action_horizon)
+    dataset=MagiClawDataset(pred_horizon=pred_horizon,
+                            obs_horizon=state_horizon,
+                            action_horizon=action_horizon)
     print(f'------MagiClawDataset create end------')
     print(f'-----dataloader create begin------')
     dataloader=DataLoader(dataset,batch_size=4,num_workers=1,shuffle=True,
@@ -76,7 +77,6 @@ def create_MagiClaw_dataloader():
     stats=dataset.stats# 存着每个key的最大值最小值，可以帮助归一化
     print(f'-----dataloader create end------')
     return dataloader,dataset
- 
 
 def test_MagiClaw_dataloader():
     dataloader,dataset=create_MagiClaw_dataloader()

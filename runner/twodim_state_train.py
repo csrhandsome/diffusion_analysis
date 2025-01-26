@@ -1,5 +1,5 @@
 from data_analysis.dataset.demo_push_t_dataset import *
-from diffusion.model.cnn_based import *
+from diffusion.model.diffusion.cnn_based import *
 from util.plot_visualiazer_util import *
 
 def twodim_state_create_model():

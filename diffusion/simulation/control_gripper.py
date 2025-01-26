@@ -56,10 +56,13 @@ import time
     print("仿真已完成并关闭环境。")'''
 
 
-def control_gripper(env: GripperEnv, pose: np.ndarray, angle: float) -> None:
+def control_gripper(env: GripperEnv, data) -> None:
     # 施加动作
-    env.step(pose=pose, angle=angle)
-    # 渲染当前状态
-    env.render()
-    # 延时以观察动作
-    time.sleep(env.model.opt.timestep)
+    pose=data['pose']
+    angle=data['angle']
+    for i in range(len(pose)):
+        env.step(pose=pose[i], angle=angle[i])
+        # 渲染当前状态
+        env.render()
+        # 延时以观察动作
+        time.sleep(env.model.opt.timestep)
