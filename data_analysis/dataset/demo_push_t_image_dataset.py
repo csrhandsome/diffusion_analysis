@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from util.pose_transform_util import *
 from data.global_data import *
 import cv2
-from data_analysis.create_sequece import *
+from data_analysis.create_sequence import *
 
 
 

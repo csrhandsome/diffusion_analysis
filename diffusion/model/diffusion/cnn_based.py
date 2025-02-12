@@ -28,6 +28,20 @@ import gym
 from gym import spaces
 from data.global_data import *
 
+def create_model():
+    model = ConditionalUnet1D(input_dim=input_dim, global_cond_dim=global_cond_dim)
+    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    num_diffuison=100
+    noise_scheduler=DDPMScheduler(num_train_timesteps=num_diffuison,
+                                  clip_sample=True,
+                                  prediction_type='epsilon',
+                                  beta_schedule='squaredcos_cap_v2')
+    model=model.to(device)
+    ema=EMAModel(parameters=model.parameters(),power=0.75)
+    optimizer=torch.optim.AdamW(params=model.parameters(),lr=1e-4,weight_decay=1e-6)
+    print(f'model created')
+    return model,noise_scheduler,ema,optimizer
+
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):
         super().__init__()

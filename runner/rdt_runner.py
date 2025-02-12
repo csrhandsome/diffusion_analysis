@@ -244,6 +244,6 @@ class RDTRunner(
         )
         
         return action_pred
-    
+    # 重写了forward方法
     def forward(self, *args, **kwargs) -> torch.Tensor:
         return self.compute_loss(*args, **kwargs)

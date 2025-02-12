@@ -1,4 +1,4 @@
-from data_analysis.create_sequece import *
+from data_analysis.create_sequence import *
 from data_analysis.get_all_data import get_all_data
 from tqdm.auto import tqdm
 

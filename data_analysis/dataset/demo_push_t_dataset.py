@@ -1,4 +1,4 @@
-from data_analysis.create_sequece import *
+from data_analysis.create_sequence import *
 
 
 
