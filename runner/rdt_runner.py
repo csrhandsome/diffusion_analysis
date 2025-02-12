@@ -7,10 +7,10 @@ import torch.nn.functional as F
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_dpmsolver_multistep import \
     DPMSolverMultistepScheduler
-from models.hub_mixin import CompatiblePyTorchModelHubMixin
-from models.rdt.model import RDT
+from diffusion.model.repo_from_huggingface import CompatiblePyTorchModelHubMixin
+from diffusion.model.diffusion import rdt_model
 
-
+RDT = rdt_model
 class RDTRunner(
         nn.Module, 
         CompatiblePyTorchModelHubMixin, 

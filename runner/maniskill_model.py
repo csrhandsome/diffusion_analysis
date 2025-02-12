@@ -5,20 +5,20 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from configs.state_vec import STATE_VEC_IDX_MAPPING
-from models.multimodal_encoder.siglip_encoder import SiglipVisionTower
-from models.multimodal_encoder.t5_encoder import T5Embedder
-from models.rdt_runner import RDTRunner
+from data.state_vec import STATE_VEC_IDX_MAPPING
+from diffusion.model.multimodal_encoder.siglip_encoder import SiglipVisionTower
+from diffusion.model.multimodal_encoder.t5_encoder import T5Embedder
+from runner.rdt_runner import RDTRunner
 
 
 MANISKILL_INDICES = [
-    STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(7)
+    STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(7)# 获取其右臂的7个关节位置索引
 ] + [
     STATE_VEC_IDX_MAPPING[f"right_gripper_open"]
-]
+]# 人类技能的索引值
 
 
-def create_model(args, pretrained, **kwargs):
+def create_model(args, pretrained, **kwargs):# 多余的参数传给了kwargs，并且形成了一个字典
     model = RoboticDiffusionTransformerModel(args, **kwargs)
     if pretrained is not None:
         model.load_pretrained_weights(pretrained)
@@ -64,7 +64,12 @@ class RoboticDiffusionTransformerModel(object):
         img_cond_len = (self.args["common"]["img_history_size"] 
                         * self.args["common"]["num_cameras"] 
                         * self.vision_model.num_patches)
-        
+        # action_dim = 128 (状态/动作维度)
+        # pred_horizon = 64 (预测未来动作数量)
+        # lang_token_dim = 4096 (语言token维度)
+        # img_token_dim = 1152 (图像token维度)
+        # state_token_dim = 128 (状态token维度)
+        # max_lang_cond_len = 1024 (最大语言token长度)
         _model = RDTRunner(
             action_dim=self.args["common"]["state_dim"],
             pred_horizon=self.args["common"]["action_chunk_size"],
@@ -253,7 +258,7 @@ class RoboticDiffusionTransformerModel(object):
         image_embeds = self.vision_model(image_tensor).detach()
         image_embeds = image_embeds.reshape(-1, self.vision_model.hidden_size).unsqueeze(0)
 
-        # history of actions
+        # history of actions !!!action部分 
         joints = proprio.to(device).unsqueeze(0)   # (1, 1, 14)
         states, state_elem_mask = self._format_joint_to_state(joints)    # (1, 1, 128), (1, 128)
         states, state_elem_mask = states.to(device, dtype=dtype), state_elem_mask.to(device, dtype=dtype)
