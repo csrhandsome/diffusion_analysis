@@ -1,224 +1,256 @@
-import time
-from datetime import datetime
+import re
+import torch.nn.functional as F
 import torch
 import torch.nn as nn
 import numpy as np
 import tqdm
 import collections
-from data.global_data import *
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from data_analysis.dataset.magiclaw_dataset import create_MagiClaw_dataloader
-from diffusion.model.diffusion.cnn_based import create_model
+from diffusion.model.diffusion.cnn_based import ConditionalResidualBlock1D, ConditionalUnet1D
+from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_dpmsolver_multistep import DPMSolverMultistepScheduler
+from diffusers.training_utils import EMAModel
 from diffusers.optimization import get_scheduler
-from util.plot_visualiazer_util import ActionVisualizer3D
-from diffusion.simulation.control_gripper import control_gripper
-from diffusion.simulation.gripper_env import GripperEnv
-from util.mujoco_util import interpolate_actions
 from data_analysis.create_sequence import normalize_data,unnormalize_data
 from diffusion.model.repo_from_huggingface import CompatiblePyTorchModelHubMixin
-# 2024.11.4 真正的action应该包括了位姿数据加上夹爪的开合数据  那么用来预测的数据应该为?
+from diffusers.schedulers.scheduling_dpmsolver_multistep import DPMSolverMultistepScheduler
 
 class UNETRunner(
         nn.Module,
         CompatiblePyTorchModelHubMixin
     ):
-    def __init__(self):
-        self.model, self.noise_scheduler, self.ema, self.optimizer = create_model()
-        self.dataloader,self.dataset=create_MagiClaw_dataloader()
-        self.lr_scheduler=get_scheduler(name='cosine',
+    def __init__(self, action_dim, pred_horizon,config, n_obs_steps,
+                 img_dim, state_dim, 
+                 img_cond_len,obs_as_global_cond=True,dtype=torch.bfloat16):
+        # init model
+        self.pred_horizon,self.img_cond_len = pred_horizon,img_cond_len
+        self.pretrained = True
+        self.obs_as_global_cond = obs_as_global_cond
+        noise_scheduler_config = config['noise_scheduler']
+        input_dim = action_dim + state_dim + img_dim
+        global_cond_dim = None
+        # 有 n_obs_steps 个历史观测步，模型需要将所有时间步的特征 拼接成一个长向量
+        if obs_as_global_cond:# 暂定为True,因为要输入输出是一样的
+            input_dim = action_dim
+            global_cond_dim = (state_dim + img_dim)*n_obs_steps
+        self.model = ConditionalUnet1D(
+            input_dim=input_dim,
+            local_cond_dim=None,
+            global_cond_dim=global_cond_dim,
+            diffusion_step_embed_dim=256,
+            down_dims=[256,512,1024],
+            kernel_size=5,
+            n_groups=8
+        )
+        self.device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        noise_scheduler=DDPMScheduler(num_train_timesteps=noise_scheduler_config['num_train_timesteps'],
+                                    clip_sample=True,
+                                    prediction_type=noise_scheduler_config['prediction_type'],
+                                    beta_schedule=noise_scheduler_config['beta_schedule'])
+        self.model=self.model.to(self.device)
+        self.ema=EMAModel(parameters=self.model.parameters(),power=0.75)
+        self.optimizer=torch.optim.AdamW(params=self.model.parameters(),lr=1e-4,weight_decay=1e-6)
+        self.noise_scheduler_sample = DPMSolverMultistepScheduler(
+                num_train_timesteps=noise_scheduler_config['num_train_timesteps'],
+                beta_schedule=noise_scheduler_config['beta_schedule'],
+                prediction_type=noise_scheduler_config['prediction_type'],
+            )
+        self.lr_scheduler = get_scheduler(name='cosine',
                                         optimizer=self.optimizer,
                                         num_warmup_steps=500,
                                         num_training_steps=len(self.dataloader))
-        self.pretrained=True
-        self.device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.prediction_type = noise_scheduler_config['prediction_type']
+        print(f'model created')
+        
+        # init data
+        self.hidden_size = config['rdt']['hidden_size']
+        self.dataloader,self.dataset = create_MagiClaw_dataloader()
+        self.img_adaptor = self.build_condition_adapter(
+            config['img_adaptor'], 
+            in_features = img_dim, 
+            out_features = self.hidden_size)
+        action_mask_dim=action_dim
+        self.state_adaptor = self.build_condition_adapter(
+            config['state_adaptor'], 
+            in_features = state_dim,# unet里面不合并了，因为没有注意力机制，并且将video和state作为了globalcond,但是所有的输入之前都要concat一下action_mask,action_mask可以用来指导生成。
+            out_features = self.hidden_size
+        )
+        self.all_cond_adaptor = self.build_condition_adapter(
+            config['all_cond_adaptor'], # 也许需要更大维度的MLP
+            in_features = state_dim+action_mask_dim+img_dim,
+            out_features = self.hidden_size
+        )
+        print(f'cond_adapter created')# 映射到统一的隐藏空间(hidden_size)的模型建立了
+    
+    def build_condition_adapter(
+        self, projector_type, in_features, out_features):
+        '''
+        将不同模态的输入映射到统一的隐藏空间的模型(MLP还有Linear)
+        '''
+        projector = None
+        if projector_type == 'linear':
+            projector = nn.Linear(in_features, out_features)
+        else:
+            mlp_gelu_match = re.match(r'^mlp(\d+)x_gelu$', projector_type)
+            if mlp_gelu_match:
+                mlp_depth = int(mlp_gelu_match.group(1))
+                modules = [nn.Linear(in_features, out_features)]
+                for _ in range(1, mlp_depth):
+                    modules.append(nn.GELU(approximate="tanh"))
+                    modules.append(nn.Linear(out_features, out_features))
+                projector = nn.Sequential(*modules)
+
+        if projector is None:
+            raise ValueError(f'Unknown projector type: {projector_type}')
+
+        return projector
+
+    def adapt_conditions(self, img_tokens, state_tokens,action_mask):
+        '''
+        将语言、图像和状态的条件输入通过适配器映射到统一的隐藏空间
+        lang_tokens: (batch_size, lang_len, lang_token_dim)
+        img_tokens: (batch_size, img_len, img_token_dim)
+        state_tokens: (batch_size, state_len, state_token_dim)
+        action_mask: (batch_size, 1, action_dim), a 0-1 **float** tensor
+            indicating the valid action dimensions.
+        return: adpated (..., hidden_size) for all input tokens
+        '''
+        adpated_img = self.img_adaptor(img_tokens)
+        adpated_state = self.state_adaptor(state_tokens)
+        adpated_action_mask = self.state_adaptor(action_mask)# 试着共用一下state_adaptor,毕竟可能在同一个空间
+        return adpated_img, adpated_state, adpated_action_mask
+    
+    def conditional_sample(self,  img_cond, 
+                        state_traj, action_mask, ctrl_freqs):
+        '''
+        生成action
+        lang_cond: language conditional data, (batch_size, lang_len, hidden_size).
+        lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
+            which should be True-False bool tensor.
+        img_cond: image conditional data, (batch_size, img_len, hidden_size).
+        state_traj: (batch_size, 1, hidden_size), state trajectory.
+        action_mask: (batch_size, 1, action_dim), a 0-1 **float** tensor
+            indicating the valid action dimensions.
+        ctrl_freqs: (batch_size,), control frequency for each sample.
+        
+        return: (batch_size, horizon, action_dim)
+        '''
+        device = state_traj.device
+        dtype = state_traj.dtype
+        noisy_action = torch.randn(
+            size=(state_traj.shape[0], self.pred_horizon, self.action_dim), 
+            dtype=dtype, device=device)
+        action_mask = action_mask.expand(-1, self.pred_horizon, -1)
+    
+        # Set step values
+        self.noise_scheduler_sample.set_timesteps(self.num_inference_timesteps)
+        
+        for t in self.noise_scheduler_sample.timesteps:
+            # Prepare state-action trajectory
+            action_traj = noisy_action
+            action_traj = self.state_adaptor(action_traj)
+            img_cond, state_cond, action_mask_cond = self.adapt_conditions(
+                img_cond, state_traj, action_mask)# (B,img_len,hidden_size),(B,1,hidden_size),(B,1,hidden_size)
+            # Predict the model output t不行就不unsqueeze
+            global_cond = torch.cat([img_cond, state_cond, action_mask_cond], dim=1)# 三个cond
+            model_output = self.model(noisy_action, t, global_cond=global_cond)
+            # Compute previous actions: x_t -> x_t-1
+            noisy_action = self.noise_scheduler_sample.step(
+                model_output, t, noisy_action).prev_sample
+            noisy_action = noisy_action.to(state_traj.dtype)
+        
+        # Finally apply the action mask to mask invalid action dimensions
+        noisy_action = noisy_action * action_mask
+
+        return noisy_action
+    
     # ========= Train  ============
-    def compute_loss(self):
-        print('-------------Training state_and_vision model-------------')
-        with tqdm(range(diffusion_num),desc='Epoch') as tqdm_epoch:
-            for epoch in tqdm_epoch:
-                epoch_loss=list()
-                with tqdm(self.dataloader,desc='Batch', leave=False) as tqdm_batch:#leave=False 进度条不leave,一直在原地刷新
-                    for batch in tqdm_batch:#batch为batch_size的个sample_sequence
-                        epoch_state=batch['state'].to(self.device).detach().float()
-                        epoch_action=batch['action'].to(self.device).detach().float() 
-                        '''print(f'epoch_state is {epoch_state.shape}')
-                        print(f'epoch_action is {epoch_action.shape}')'''
-                        Batch_size = epoch_state.shape[0]
-                        # FiLM conditioning
-                        # (B, obs_horizon, obs_dim)
-                        state_cond = epoch_state[:,:state_horizon,:]#把一个时间步的提取出来，然后flatten
-                        # (B, obs_horizon * obs_dim)
-                        state_cond = state_cond.flatten(start_dim=1)
+    def compute_loss(self,img_tokens, state_tokens,
+                     action_gt,action_mask,ctrl_freqs,lang_tokens=None):
+        '''
+        把action变成噪声,然后预测噪声
+        lang_tokens: (batch_size, lang_len, lang_token_dim)
+        img_tokens: (batch_size, img_len, img_token_dim)
+        state_tokens: (batch_size, 1, state_token_dim)
+        action_gt: (batch_size, horizon, state_token_dim), ground-truth actions for supervision
+        action_mask: (batch_size, 1, state_token_dim), a 0-1 **float** tensor.
+        ctrl_freqs: (batch_size,), control frequency for each sample.
+        
+        return: loss_value, a scalar tensor
+        '''
+        batch_size = img_tokens.shape[0]
+        # device = img_tokens.device  
 
-                        # 按照action维度生成的噪声
-                        noise = torch.randn(epoch_action.shape, device=self.device,dtype=torch.float32)
+        # Sample noise that we'll add to the actions
+        noise = torch.randn(
+            action_gt.shape, dtype=action_gt.dtype, device=self.device
+        )
+        # 将每个数据点采样一个扩散迭代次数 范围为[0, num_train_timesteps-1]，维度为(B,)
+        timesteps = torch.randint(
+            0, self.num_train_timesteps, 
+            (batch_size,), device=self.device
+        ).long()
+        # 根据每次扩散迭代中的噪声幅度向action添加噪声，使其变模糊（这是前向扩散过程）
+        noisy_action = self.noise_scheduler.add_noise(
+            action_gt, noise, timesteps)
+        
+        # ======global_cond的处理======
+        if self.obs_as_global_cond:
+            img_cond, state_cond, action_mask_cond = self.adapt_conditions(
+                img_tokens, state_tokens,action_mask)# (B,img_len,hidden_size),(B,1,hidden_size),(B,1,hidden_size)
+            
+            global_cond = torch.cat([img_cond, state_cond, action_mask_cond], dim=1)# 三个cond
+            
+            pred = self.model(noisy_action, timesteps, global_cond=global_cond)
+        else:# 局部条件情况 将cond_data和action合并
+            # 合并state和action，形成一个大的state_action_traj
+            state_action_traj = torch.cat([state_tokens, noisy_action], dim=1)
+            # Append the action mask to the input sequence
+            action_mask = action_mask.expand(-1, state_action_traj.shape[1], -1)
+            cond_data = torch.cat([state_action_traj, action_mask, img_cond], dim=2)
 
-                        # 将每个数据点采样一个扩散迭代次数 范围为[0, num_train_timesteps-1]，维度为(B,)
-                        timesteps = torch.randint(
-                            0, self.noise_scheduler.config.num_train_timesteps,
-                            (Batch_size,), device=self.device
-                        ).long
-                        # 根据每次扩散迭代中的噪声幅度向action添加噪声，使其变模糊（这是前向扩散过程）
-                        noisy_actions = self.noise_scheduler.add_noise(
-                            epoch_action, noise, timesteps)
-                        # 模型预测噪声残差预测值,模型输出的仍然是action的维度
-                        noise_pred = self.model(
-                            noisy_actions, timesteps, global_cond=state_cond)# output=model(noise,diffusion_iter,obs.flatten(start_dim=1))
-                            
-                        # 以下添加了损失函数，优化器，还有一个lr_scheduler大抵是优化器吧
-                        # 把model预测的噪声和随机生成的噪声进行一个mse计算(毕竟这俩确实维度相同)
-                        loss = nn.functional.mse_loss(noise_pred, noise)
+            # 映射到统一的hidden_size
+            cond_data = self.all_cond_adaptor(cond_data)
 
-                        # optimize
-                        loss.backward()
-                        self.optimizer.step()
-                        self.optimizer.zero_grad()
-                        # step lr scheduler every batch
-                        # this is different from standard pytorch behavior(酷)
-                        self.lr_scheduler.step()
+            pred = self.model(cond_data, timesteps, global_cond=None)
+        pred_type = self.prediction_type 
+        if pred_type == 'epsilon':# epsilon是预测的噪声
+            target = noise
+        elif pred_type == 'sample':# sample是预测的action
+            target = action_gt
+        else:
+            raise ValueError(f"Unsupported prediction type {pred_type}")
 
-                        # update Exponential Moving Average of the model weights
-                        self.ema.step(self.model.parameters())
-
-                        # 加载动画条
-                        loss_cpu = loss.item()
-                        epoch_loss.append(loss_cpu)
-                        tqdm_batch.set_postfix(loss=loss_cpu)
-                tqdm_epoch.set_postfix(loss=np.mean(epoch_loss))
-
-                        # 在这之前需要解决所谓步长，空间等的维度问题。还需要解决dataloader中的sample两个函数的问题，
-                        # buffer_start_idx, buffer_end_idx,sample_start_idx, sample_end_idx的含义
-                        # batch['obs'].shape: torch.Size([256, 2, 5]) 
-                        # batch['action'].shape torch.Size([256, 16, 2])
-        checkpoint = {
-        'model_state_dict': self.model.state_dict(),
-        'optimizer_state_dict': self.optimizer.state_dict(),
-        }
-        torch.save(checkpoint, "cnn_based_model.ckpt")
-        self.noise_scheduler.save_pretrained("noise_scheduler_state")
-        print('-------------Training state_and_vision model ended-------------')
+        loss = F.mse_loss(pred, target)
+        return loss
+    
     # ========= Inference  ============
-    def predict_action(self):
+    def predict_action(self,img_tokens, state_tokens,
+                       action_mask,ctrl_freqs,lang_tokens=None):
         '''
-        每次循环预测pred_horizon步的动作序列
-        但只执行其中的action_horizon步(通常小于pred_horizon)
-        然后重新规划后续动作
+        lang_tokens: (batch_size, lang_len, lang_token_dim)
+        lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
+            which should be True-False bool tensor.
+        img_tokens: (batch_size, img_len, img_token_dim)
+        state_tokens: (batch_size, 1, state_token_dim)
+        action_mask: (batch_size, 1, action_dim),
+            which should be a 0-1 **float** tensor.
+        ctrl_freqs: (batch_size,), control frequency for each sample.
+        
+        return: (batch_size, horizon, action_dim), predicted action sequence
         '''
-        max_steps=200
-        step_idx=0
-        print('-----------Testing state_and_vision model-----------')
-        # 读取ckpt模型参数
-        if self.pretrained==True:
-            model_dict = torch.load("cnn_based_model.ckpt", map_location='cuda',weights_only=False)
-        self.device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Prepare the state and conditions
+        state_tokens = torch.cat([state_tokens, action_mask], dim=2)
+        img_cond, state_traj = self.adapt_conditions(
+            img_tokens, state_tokens)
         
-        # 加载模型参数
-        self.model.load_state_dict(model_dict['model_state_dict'])
-        self.optimizer.load_state_dict(model_dict['optimizer_state_dict'])
-        self.noise_scheduler = DDPMScheduler.from_pretrained("noise_scheduler_state/scheduler_config.json")
-
-        # -------simulation start-------
-        state=self.mydataset.initial_state# state就是cond，到时候真实环境情况下就选取显示的initial_state
-        state_deque=collections.deque([state]*state_horizon,maxlen=state_horizon)
-        done=False
-        env=GripperEnv()
-        pred_action=np.array([])
-        with tqdm(total=200,desc='Output',leave=False) as pbar:
-            while not done:
-                Batch=1
-                state_seq=np.stack(state_deque)
-                state_seq=normalize_data(state_seq,self.mydataset.stats['state'])
-                state_seq=torch.from_numpy(state_seq).to(self.device, dtype=torch.float32)
-                with torch.no_grad():# 禁用梯度计算，节省内存并加快运行速度
-                    state_seq=state_seq.unsqueeze(0).flatten(start_dim=1)
-                    noise_action=torch.randn((Batch,pred_horizon,input_dim),device=self.device)
-                    naction=noise_action
-                    self.noise_scheduler.set_timesteps(train_num)
-                    for i in range(train_num):
-                        noise_pred=self.model(
-                            sample=naction,
-                            timestep=i,
-                            global_cond=state_seq
-                        )
-                        # noise_scheduler.step() 方法返回的是一个 DDPMSchedulerOutput 对象，而不是直接返回一个张量。所以要加.prev_sample
-                        naction=self.noise_scheduler.step(
-                            model_output=noise_pred,
-                            timestep=i,
-                            sample=naction
-                        ).prev_sample 
-                naction = naction.detach().to('cpu').numpy()#(1,8,7)
-                # action shape is (B, pred_horizon, action_dim)
-                naction = naction[0]
-                action_pred = unnormalize_data(naction, stats=self.mydataset.stats['action'])# 预测的动作出来了，并且将其标准化
-
-                # action_hoizon长度的action
-                start = input_dim - 1
-                end = start + input_dim # 取出一个现有的state步长的动作
-                action = action_pred[start:end,:]
-                data=dict()# 最后的action的输出
-                data['timestamp']=None
-                data['Pose']=None
-                data['Angle']=None
-                for i in range(len(action)):  # action 的长度相当于是 start:end 的数量
-                    current_action = action[i]  # (action_dim,)
-                    print(f"执行动作 {step_idx + 1}: {current_action}")
-                    pose = current_action[:6]
-                    angle = current_action[-1]
-                    if data['Angle'] is None:
-                        data['Angle']=angle
-                        data['Pose']=pose
-                    else:
-                        data['Angle']=np.concatenate((data['Angle'],angle))# 注意这里的语法：将要连接的数组放在一个列表中 shape:(473, 16)
-                        data['Pose']=np.concatenate(data['Pose'],pose)               
-                    '''# 进行插值 看着更连续
-                    # 获取当前位姿和开度
-                    current_pose, _ = env.get_pose()
-                    current_angle = env.get_position()
-                    # 还可以调整步数
-                    interp_steps = 10  
-                    interpolated_poses, interpolated_angles = interpolate_actions(current_pose, pose, interp_steps)
-                    for interp_pose, interp_angle in zip(interpolated_poses, interpolated_angles):
-                        control_gripper(env, interp_pose, interp_angle)
-                        step_idx += 1
-                        pbar.update(1)
-
-                        if step_idx >= max_steps:
-                            done = True
-                            break# 如果要插值的话，值会更多，需要遍历插值后的动作序列，然后执行'''
-                    
-                    step_idx += 1
-                    pbar.update(1)
-                    if step_idx >= max_steps:
-                        done = True
-                    if done:
-                        break
-                    # 更新状态队列（假设执行后更新状态）
-                    # state = 获取当前状态的逻辑
-                    # state_deque.append(state)
-                freq=60
-                time_step=1/freq
-                timestamp=np.zeros(len(data['pose']))
-                for j in range(len(data['pose'])):
-                    current_timestamp=time_step*j
-                    timestamp[j]=current_timestamp
-                data['timestamp']=timestamp
-        # 进行仿真
-        control_gripper(env, data)
-        # 手动关闭渲染器  
-        while env.viewer and env.viewer.is_running(): 
-            env.render()
-            time.sleep(0.01)
-        # 仿真完成，关闭渲染器和环境
-        env.close()
-        print("-------simulation finished-------")
-
+        # Run sampling
+        action_pred = self.conditional_sample(
+            img_cond, 
+            state_traj, action_mask, ctrl_freqs,
+        )
         
-        '''for i in range(len(mydataset.episodes_ends)):
-            if i==len(mydataset.episodes_ends)-1:
-                break
-            cur_action=simlation_action[mydataset.episodes_ends[i]:mydataset.episodes_ends[i+1],:]
-            pose=cur_action[:6]
-            angle=cur_action[-1]
-            simple_simulation(pose,angle)'''
+        return action_pred
+    
     def forward(self, *args, **kwargs) -> torch.Tensor:
         return self.compute_loss(*args, **kwargs)

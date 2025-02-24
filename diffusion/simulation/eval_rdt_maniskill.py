@@ -7,7 +7,7 @@ from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.utils import common, gym_utils
 import argparse
 import yaml
-from scripts.maniskill_model import create_model, RoboticDiffusionTransformerModel
+from scripts.maniskill_rdt_model import create_model, RoboticDiffusionTransformerModel
 import torch
 from collections import deque
 from PIL import Image

@@ -26,7 +26,7 @@ def get_resnet(name:str, weights=None, **kwargs) -> nn.Module:
     resnet = func(weights=weights, **kwargs)
 
     # for resnet18, the output dim should be 512
-    #通过这种修改，ResNet模型将输出其最后一个卷积层的特征，而不是进行分类预测。这为进一步的处理或自定义提供了更大的灵活性。
+    #通过这种修改，ResNet模型的最后一层被替换成nn.Identity(),将直接输出其最后一个卷积层的特征，而不是进行分类预测。
     resnet.fc = torch.nn.Identity()
     return resnet
 

@@ -439,13 +439,9 @@ class RDT(nn.Module):
     def forward(self, x, freq, t, lang_c, img_c, lang_mask=None, img_mask=None):
         """
         Forward pass of RDT.
-        
-        x: (B, T, D), state + action token sequence, T = horizon + 1,
+        相当于是传入的是state + action token sequence,利用这个为x来预测,最终输出的时候再只保留action token
+        x: (B, T, D), state + action token sequence, T = horizon + 1,这里的+1是因为包含了当前的action token
             dimension D is assumed to be the same as the hidden size.
-        freq是RDT相比CNN-based的一个重要扩展,因为它允许模型
-        - 更精确地控制动作执行的时间特性
-        - 更灵活地处理不同频率的控制信号
-        - 在训练和推理时更高效地处理不同频率的控制信号
         freq: (B,), a scalar indicating control frequency.
         t: (B,) or (1,), diffusion timesteps.
         lang_c: (B, L_lang, D) or None, language condition tokens (variable length),
@@ -462,7 +458,7 @@ class RDT(nn.Module):
         print(f'freq is {freq.shape}')
         if t.shape[0] == 1:
             t = t.expand(x.shape[0], -1, -1)
-        x = torch.cat([t, freq, x], dim=1)               # x原本的(B, T+1, D)
+        x = torch.cat([t, freq, x], dim=1)              # x变为(B, T+2, D),因为添加了变换后的t(B, 1, D)和freq(B, 1, D)
         print(f'x is {x.shape}')
         print(f'x_pos_embed is {self.x_pos_embed.shape}')
         # Add multimodal position embeddings
@@ -481,5 +477,8 @@ class RDT(nn.Module):
         x = self.final_layer(x)                         # (B, T+1, out_channels)
 
         # Only preserve the action tokens
+        # 这里 -self.horizon: 表示从倒数第 horizon 个 token 开始，取到最后的所有 token。
+        # 由于 x 的维度是 (B, T+2, out_channels)，而 T = horizon + 1，因此：
+        # x[:, -self.horizon:] 的维度是 (B, horizon, out_channels)，即只保留了 action tokens。
         x = x[:, -self.horizon:]
         return x

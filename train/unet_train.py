@@ -20,7 +20,7 @@ from safetensors.torch import load_model
 from diffusion.model.diffusion.ema_model import EMAModel
 from diffusion.model.multimodal_encoder.siglip_encoder import SiglipVisionTower
 from diffusion.model.multimodal_encoder.t5_encoder import T5Embedder
-from runner.rdt_runner import RDTRunner
+from runner.unet_runner import UNETRunner
 from data_analysis.dataset.rdt_dataset import DataCollatorForVLAConsumerDataset, VLAConsumerDataset
 from train.sample import log_sample_res
 
@@ -58,7 +58,7 @@ This is a RDT model derived from {base_model}. The weights were trained using [R
 
 
 def train(args, logger):
-    # 默认是data/config.yaml
+    # Read the config 默认是data/config.yaml
     with open(args.config_path, "r") as fp:
         config = yaml.safe_load(fp)
 
@@ -132,38 +132,26 @@ def train(args, logger):
         and not os.path.isfile(args.pretrained_model_name_or_path)
     ):
         logger.info("Constructing model from pretrained checkpoint.")
-        rdt = RDTRunner.from_pretrained(args.pretrained_model_name_or_path)
+        unet = UNETRunner.from_pretrained(args.pretrained_model_name_or_path)
     else:
         logger.info("Constructing model from provided config.")
         # Calculate the image condition length
         img_cond_len = (config["common"]["img_history_size"] 
                         * config["common"]["num_cameras"] 
-                        * vision_encoder.num_patches)
-        rdt = RDTRunner(
+                        * 1)# # 将resnet最后一层替换成Identity了，因此vision_encoder.num_patches=1
+        unet = UNETRunner(
             action_dim=config["common"]["state_dim"],
-            pred_horizon=config["common"]["action_chunk_size"],
+            pred_horizon=config["common"]["action_chunk_size"],# 64
             config=config["model"],
-            lang_token_dim=config["model"]["lang_token_dim"],
-            img_token_dim=config["model"]["img_token_dim"],
-            state_token_dim=config["model"]["state_token_dim"],
-            max_lang_cond_len=config["dataset"]["tokenizer_max_length"],
+            img_dim=config["model"]["img_token_dim"],# 1152
+            state_dim=config["model"]["state_token_dim"],
             img_cond_len=img_cond_len,
-            img_pos_embed_config=[
-                # No initial pos embed in the last grid size
-                # since we've already done in ViT
-                ("image", (config["common"]["img_history_size"], 
-                    config["common"]["num_cameras"], 
-                    -vision_encoder.num_patches)),  
-            ],
-            lang_pos_embed_config=[
-                # Similarly, no initial pos embed for language
-                ("lang", -config["dataset"]["tokenizer_max_length"]),
-            ],
+            obs_as_global_cond=False,
             dtype=weight_dtype,
         )
         
                                                                        
-    ema_rdt = copy.deepcopy(rdt)
+    ema_rdt = copy.deepcopy(unet)
     ema_model = EMAModel(
         ema_rdt,
         update_after_step=config["model"]["ema"]["update_after_step"],
@@ -179,7 +167,7 @@ def train(args, logger):
         if accelerator.is_main_process:
             for model in models:
                 model_to_save = model.module if hasattr(model, "module") else model  # type: ignore
-                if isinstance(model_to_save, type(accelerator.unwrap_model(rdt))):
+                if isinstance(model_to_save, type(accelerator.unwrap_model(unet))):
                     model_to_save.save_pretrained(output_dir)
 
     accelerator.register_save_state_pre_hook(save_model_hook)
@@ -212,7 +200,7 @@ def train(args, logger):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    params_to_optimize = rdt.parameters()
+    params_to_optimize = unet.parameters()
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -289,8 +277,8 @@ def train(args, logger):
     )
 
     # Prepare everything with our `accelerator`.
-    rdt, optimizer, train_dataloader, sample_dataloader, lr_scheduler = accelerator.prepare(
-        rdt, optimizer, train_dataloader, sample_dataloader, lr_scheduler                   
+    unet, optimizer, train_dataloader, sample_dataloader, lr_scheduler = accelerator.prepare(
+        unet, optimizer, train_dataloader, sample_dataloader, lr_scheduler                   
     )
 
     ema_rdt.to(accelerator.device, dtype=weight_dtype)                                                                             
@@ -336,7 +324,7 @@ def train(args, logger):
         # Since EMA is deprecated, we do not load EMA from the pretrained checkpoint
         logger.info("Loading from a pretrained checkpoint.")
         checkpoint = torch.load(args.pretrained_model_name_or_path)
-        rdt.module.load_state_dict(checkpoint["module"])
+        unet.module.load_state_dict(checkpoint["module"])
    
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
@@ -362,7 +350,7 @@ def train(args, logger):
                 # load deepspeed's state_dict
                 logger.info("Resuming training state failed. Attempting to only load from model checkpoint.")
                 checkpoint = torch.load(os.path.join(args.output_dir, path, "pytorch_model", "mp_rank_00_model_states.pt"))
-                rdt.module.load_state_dict(checkpoint["module"])
+                unet.module.load_state_dict(checkpoint["module"])
                 
             load_model(ema_rdt, os.path.join(args.output_dir, path, "ema", "model.safetensors"))
             global_step = int(path.split("-")[1])
@@ -378,7 +366,7 @@ def train(args, logger):
     loss_for_log = {}
     for epoch in range(first_epoch, args.num_train_epochs):
         # 通过调用train()方法，模型进入训练模式,这个是accelerator库提供的方法
-        rdt.train()
+        unet.train()
         
         # Set the progress_bar to correct position
         if args.resume_from_checkpoint and epoch == first_epoch:
@@ -386,7 +374,7 @@ def train(args, logger):
         
         # Forward and backward...
         for batch in train_dataloader:
-            with accelerator.accumulate(rdt):
+            with accelerator.accumulate(unet):
                 images = batch["images"].to(dtype=weight_dtype)
                 states = batch["states"].to(dtype=weight_dtype) # (B, T, D_a)
                 # We only use the last state as input
@@ -409,7 +397,7 @@ def train(args, logger):
                         )["last_hidden_state"].detach()
                 
                 state_elem_mask = state_elem_mask.unsqueeze(1)
-                loss = rdt(
+                loss = unet(
                     lang_tokens=text_embeds,
                     lang_attn_mask=lang_attn_mask,
                     img_tokens=image_embeds,
@@ -421,13 +409,13 @@ def train(args, logger):
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    params_to_clip = rdt.parameters()
+                    params_to_clip = unet.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
             
-            ema_model.step(accelerator.unwrap_model(rdt))
+            ema_model.step(accelerator.unwrap_model(unet))
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -445,7 +433,7 @@ def train(args, logger):
                     sample_loss_for_log = log_sample_res(
                         text_encoder,
                         vision_encoder,
-                        rdt,    # We do not use EMA currently
+                        unet,    # We do not use EMA currently
                         args,
                         accelerator,
                         weight_dtype,
@@ -468,7 +456,7 @@ def train(args, logger):
     # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        accelerator.unwrap_model(rdt).save_pretrained(args.output_dir)
+        accelerator.unwrap_model(unet).save_pretrained(args.output_dir)
         ema_save_path = os.path.join(args.output_dir, f"ema")
         accelerator.save_model(ema_rdt, ema_save_path)
         

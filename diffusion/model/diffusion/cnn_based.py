@@ -21,6 +21,7 @@ import torch.nn as nn
 import collections
 import zarr
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_dpmsolver_multistep import DPMSolverMultistepScheduler
 from diffusers.training_utils import EMAModel
 from diffusers.optimization import get_scheduler
 from tqdm.auto import tqdm
@@ -28,19 +29,6 @@ import gym
 from gym import spaces
 from data.global_data import *
 
-def create_model():
-    model = ConditionalUnet1D(input_dim=input_dim, global_cond_dim=global_cond_dim)
-    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    num_diffuison=100
-    noise_scheduler=DDPMScheduler(num_train_timesteps=num_diffuison,
-                                  clip_sample=True,
-                                  prediction_type='epsilon',
-                                  beta_schedule='squaredcos_cap_v2')
-    model=model.to(device)
-    ema=EMAModel(parameters=model.parameters(),power=0.75)
-    optimizer=torch.optim.AdamW(params=model.parameters(),lr=1e-4,weight_decay=1e-6)
-    print(f'model created')
-    return model,noise_scheduler,ema,optimizer
 
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):
@@ -251,7 +239,7 @@ class ConditionalUnet1D(nn.Module):
             global_cond=None):# 为什么接受一个5维数据可以变为2维数据
         """
         x: (B,T,input_dim)
-        timestep: (B,) or int, diffusion step
+        timestep: (B,) or int, diffusion step 训练的时候是(B,),预测的时候是int,代表第几个时间步
         global_cond: (B,global_cond_dim)
         output: (B,T,input_dim)
         """
@@ -261,6 +249,7 @@ class ConditionalUnet1D(nn.Module):
 
         # 1. time
         timesteps = timestep
+        # 转为torch.tensor
         if not torch.is_tensor(timesteps):
             # TODO: this requires sync between CPU and GPU. So try to pass timesteps as tensors if you can
             timesteps = torch.tensor([timesteps], dtype=torch.long, device=sample.device)
@@ -269,12 +258,12 @@ class ConditionalUnet1D(nn.Module):
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         timesteps = timesteps.expand(sample.shape[0])
 
-        global_feature = self.diffusion_step_encoder(timesteps)
+        global_feature = self.diffusion_step_encoder(timesteps)# 这里的timesteps简单线性变换后作为了cond的一部分
 
         if global_cond is not None:
             global_feature = torch.cat([
                 global_feature, global_cond
-            ], axis=-1)
+            ], axis=-1)# timestamp变换后的结果和cond的最后一个维度拼接
 
 
         # 开始一个一个的输入到不同的层

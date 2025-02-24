@@ -2,7 +2,8 @@ from data_analysis.get_all_data import *
 from diffusion.model.vision.resnet_visionencoder import test_vision_encoder
 from data_analysis.dataset.magiclaw_dataset import create_MagiClaw_dataloader,test_MagiClaw_dataloader
 from diffusion.simulation.control_gripper import control_gripper
-from runner.threedim_RDT_runner import *
+from train.unet_train import train
+from diffusion.model.vision.resnet_visionencoder import get_resnet, replace_bn_with_gn
 if __name__=='__main__':
    # data,initial_state=get_all_data()
    # 定义一系列带有时间戳的动作
@@ -11,7 +12,7 @@ if __name__=='__main__':
    #    {"timestamp": 0.33, "pose": np.array([0.2, 0.0, 0.0, 0.0, 0.0, np.pi/2]), "angle": 0.03},
    #    {"timestamp": 0.66, "pose": np.array([0.3, 0.0, 0.0, 0.0, 0.0, 3*np.pi/4]), "angle": 0.07},
    # ])
-   threedim_state_create_model()
+   train()
    #test_MagiClaw_dataloader()
    #print(cv2.__version__)
    #test_videodict()

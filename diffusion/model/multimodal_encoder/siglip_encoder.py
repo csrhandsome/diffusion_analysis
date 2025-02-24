@@ -27,7 +27,6 @@ class SiglipVisionTower(nn.Module):
         self.image_processor = SiglipImageProcessor.from_pretrained(self.vision_tower_name)
         self.vision_tower = SiglipVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
         self.vision_tower.eval()
-
         self.is_loaded = True
 
     def feature_select(self, image_forward_outs):

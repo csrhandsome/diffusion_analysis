@@ -311,3 +311,33 @@ v = [红色小球视觉特征, 蓝色方块视觉特征,红色三角体视觉特
 # 2025/1/17
 CFG 通过引入一个“无条件”的生成路径（即不依赖条件的生成），并与条件生成路径结合，动态调整条件信号的影响强度。(但没用)
 直接遍历字典是遍历的key,真无语，遍历字典要用item()
+
+
+# 2025/2/14
+https://poe.com/s/gDuATmJeHn1NrMu89Sym unet和transformer的模型特性,以及后续可以用作分析为什么transformer性能更加优异(可变长以及多注意力机制：1.在 RDT 中，x 的序列长度从 T 变为 T+2（拼接 t 和 freq），自注意力机制自动适应这一变化，无需调整模型结构。而unet可能需要重新去调整模型的dimension。2.unet只能将非action的都作为cond而不能直接拼接，然而transformer可以将和actiono有关的state,freq,t全部合成x然后通过强大的注意力机制去预测)https://poe.com/s/iEGy4k2o552C4gv9NjCE
+
+# 2025/2/16
+https://poe.com/s/L7xwn6Dk3o08AKNZ5lvo
+维度变换
+# 2025/2/17
+https://poe.com/s/eoIB94OdQ4kcbdD4oOIK 
+模型输入是  动作序列和观测特征直接拼接后的结果。input_dim = action_dim + obs_feature_dim，因为每个时间步的动作都与其对应的观测特征拼接，作为模型的输入。
+模型需要同时观测到当前噪声动作和对应的环境状态（观测特征），才能更精准地预测噪声。例如，在机器人控制中，机械臂的当前关节角度（动作）需要与摄像头捕捉的环境状态（观测）联合分析，才能推断出下一步的调整方向。
+也就是说，必须要input_dim = action_dim + obs_feature_dim，有state和action的输入，模型才能更好的预测
+
+https://poe.com/s/k6Qx8BQtEPHDAdUBRs89
+根据视频是全局还是局部，模型的input_dim需要变化。
+
+https://poe.com/s/urvGClKfOks30OAHe0kf
+根据是否全局的讨论:
+带任务指令的需要全局，反之用局部
+
+# 2025/2/18
+https://poe.com/s/P5GxuUnGqtPFz4HDwhkx 可能的动作空间
+
+# 2025/2/19
+https://poe.com/s/hjy6vlcK1ZxcQBBEj5dK 在unet中将action_mask作为global_cond及其理由
+https://poe.com/s/dpuDkT6biEdi0ITBUjz6 Diffusion_Policy原文当中使用全局变量和不是全局变量的做法
+
+# 2025/2/24
+准备重新修改数据，去掉timestamp，直接变成一个二维数组，每一个timestamp就是一个时间戳，没有单位了

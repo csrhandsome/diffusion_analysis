@@ -1,6 +1,5 @@
 import re
 from pathlib import Path
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,9 +7,8 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_dpmsolver_multistep import \
     DPMSolverMultistepScheduler
 from diffusion.model.repo_from_huggingface import CompatiblePyTorchModelHubMixin
-from diffusion.model.diffusion import rdt_model
+from diffusion.model.diffusion.rdt_model import RDT
 
-RDT = rdt_model
 class RDTRunner(
         nn.Module, 
         CompatiblePyTorchModelHubMixin, 
@@ -24,19 +22,21 @@ class RDTRunner(
         # Create diffusion model
         hidden_size = config['rdt']['hidden_size']
         self.model = RDT(
-            output_dim=action_dim,
+            output_dim=action_dim,# 128
             horizon=pred_horizon,
             hidden_size=hidden_size,
             depth=config['rdt']['depth'],
             num_heads=config['rdt']['num_heads'],
             max_lang_cond_len=max_lang_cond_len,
-            img_cond_len=img_cond_len,
+            img_cond_len=img_cond_len,# 使用vit处理图像时，图像会被划分为N个块，这里的img_cond_len就是N 
             lang_pos_embed_config=lang_pos_embed_config,
             img_pos_embed_config=img_pos_embed_config,
             dtype=dtype,
         )
-
         # Create adpators for various conditional inputs
+        #   lang_adaptor: mlp2x_gelu
+        #   img_adaptor: mlp2x_gelu
+        #   state_adaptor: mlp3x_gelu
         self.lang_adaptor = self.build_condition_adapter(
             config['lang_adaptor'], 
             in_features=lang_token_dim, 
@@ -50,7 +50,7 @@ class RDTRunner(
         # A `state` refers to an action or a proprioception vector
         self.state_adaptor = self.build_condition_adapter(
             config['state_adaptor'], 
-            in_features=state_token_dim * 2,    # state + state mask (indicator)
+            in_features=state_token_dim * 2, # state + state mask (indicator) 在predict_action()中传入的就是cat过的，就是*2的dimension
             out_features=hidden_size
         )
         
@@ -83,6 +83,9 @@ class RDTRunner(
     
     def build_condition_adapter(
         self, projector_type, in_features, out_features):
+        '''
+        将不同模态的输入映射到统一的隐藏空间
+        '''
         projector = None
         if projector_type == 'linear':
             projector = nn.Linear(in_features, out_features)
@@ -103,6 +106,7 @@ class RDTRunner(
     
     def adapt_conditions(self, lang_tokens, img_tokens, state_tokens):
         '''
+        将语言、图像和状态的条件输入通过适配器映射到统一的隐藏空间
         lang_tokens: (batch_size, lang_len, lang_token_dim)
         img_tokens: (batch_size, img_len, img_token_dim)
         state_tokens: (batch_size, state_len, state_token_dim)
@@ -118,6 +122,7 @@ class RDTRunner(
     def conditional_sample(self, lang_cond, lang_attn_mask, img_cond, 
                            state_traj, action_mask, ctrl_freqs):
         '''
+        将噪声去噪为动作
         lang_cond: language conditional data, (batch_size, lang_len, hidden_size).
         lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
             which should be True-False bool tensor.
@@ -133,8 +138,8 @@ class RDTRunner(
         dtype = state_traj.dtype
         noisy_action = torch.randn(
             size=(state_traj.shape[0], self.pred_horizon, self.action_dim), 
-            dtype=dtype, device=device)
-        action_mask = action_mask.expand(-1, self.pred_horizon, -1)
+            dtype=dtype, device=device)# (batch_size, pred_horizon, action_dim)
+        action_mask = action_mask.expand(-1, self.pred_horizon, -1)# expand到horizon维度 -1表示不变
     
         # Set step values
         self.noise_scheduler_sample.set_timesteps(self.num_inference_timesteps)
@@ -155,7 +160,7 @@ class RDTRunner(
                 model_output, t, noisy_action).prev_sample
             noisy_action = noisy_action.to(state_traj.dtype)
         
-        # Finally apply the action mask to mask invalid action dimensions
+        # Finally apply the action mask to mask invalid action dimensions 
         noisy_action = noisy_action * action_mask
 
         return noisy_action
@@ -165,6 +170,7 @@ class RDTRunner(
                      state_tokens, action_gt, action_mask, ctrl_freqs
                     ) -> torch.Tensor:
         '''
+        把action变成噪声,然后预测噪声
         lang_tokens: (batch_size, lang_len, lang_token_dim)
         lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
             which should be True-False bool tensor.
@@ -244,6 +250,7 @@ class RDTRunner(
         )
         
         return action_pred
+    
     # 重写了forward方法
     def forward(self, *args, **kwargs) -> torch.Tensor:
         return self.compute_loss(*args, **kwargs)
