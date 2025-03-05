@@ -7,7 +7,7 @@ from util.pose_transform_util import *
 from data.global_data import *
 
 
-def get_data_stats(data)->dict():
+def get_data_stats(data)->dict:
     '''如果原始数据形状是(10, 20, 30, 5),
     那么reshape后的形状将变为(6000, 5)'''
     data = data.reshape(-1,data.shape[-1])
@@ -58,22 +58,19 @@ def sample_sequence(train_data, sequence_length,
 def create_sample_indices(
         episode_ends:np.ndarray, sequence_length:int,
         pad_before: int=0, pad_after: int=0):
-    '''别人的创建indices函数   episode_ends是一个int数组,表示每个episode的结束(时间还是位移?)
-# 问题在于返回的四个形参太大了，超出了索引的范围很多了
-# indices is [[     0      7      1      8]
-#  [     0      8      0      8]
-#  [     1      9      0      8]
-#  ...
-#  [358569 358572      0      3]
-#  [358570 358572      0      2]
-#  [358571 358572      0      1]]'''
+    '''
+    别人的创建indices函数
+    episode_ends是一个int数组,表示每个episode的结束
+    根据最小的sequence_length和已知的episodes,计算数据的索引
+    '''
     indices = list()
     for i in range(len(episode_ends)):
         start_idx = 0
         if i > 0:
             start_idx = episode_ends[i-1]
         end_idx = episode_ends[i]
-        episode_length = end_idx - start_idx#每个段的长度
+        episode_length = end_idx - start_idx # 每个段的长度
+        
         min_start = -pad_before
         max_start = episode_length - sequence_length + pad_after
         # range stops one idx before end
@@ -96,6 +93,6 @@ def create_sample_indices(
 
 def my_create_sample_indices(episode_ends:np.ndarray, sequence_length:int,
         pad_before: int=0, pad_after: int=0):
-    '''根据时间步，reshape数据'''
+    '''根据时间步,reshape数据'''
     return
 

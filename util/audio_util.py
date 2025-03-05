@@ -34,24 +34,19 @@ def read_audio(audio_file, frame_length=100, hop_length=100):
         print(f"加载音频数据时出错: {str(e)}")
         return None, None
 
-def read_audio_target_freq(audio_file, target_freq=30):
+def read_audio_target_freq(audio_file, target_freq=29.5):
     """
     使用librosa的resample功能进行重采样
     """
     # 读取原始音频
     y, sr = librosa.load(audio_file)
     y, _ = librosa.effects.trim(y)
-    
     # 计算目标采样点数
     target_length = int(len(y) * target_freq / sr)
-    
     # 重采样
     y_resampled = librosa.resample(y, orig_sr=sr, target_sr=target_freq)
     
-    # 补零
-    y_resampled = np.pad(y_resampled, (0, 5000), mode='constant')
-    
-    return y_resampled, target_freq
+    return y_resampled,sr
 
 def get_audio_timestamps(y, sr)->np.ndarray:
     duration = len(y) / sr  # 总时长（秒）

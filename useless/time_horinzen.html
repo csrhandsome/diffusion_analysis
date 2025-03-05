@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        .container {
+            width: 800px;
+            height: 400px;
+            position: relative;
+            font-family: Arial, sans-serif;
+        }
+        .timeline {
+            position: absolute;
+            width: 700px;
+            height: 2px;
+            background: #333;
+            top: 200px;
+            left: 50px;
+        }
+        .time-point {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #333;
+            border-radius: 50%;
+            top: -4px;
+        }
+        .time-label {
+            position: absolute;
+            top: 15px;
+            transform: translateX(-50%);
+        }
+        .window {
+            position: absolute;
+            height: 100px;
+            border: 2px dashed #2196F3;
+            top: 50px;
+            border-radius: 5px;
+        }
+        .prediction {
+            position: absolute;
+            height: 80px;
+            background: rgba(76, 175, 80, 0.2);
+            top: 60px;
+        }
+        .execution {
+            position: absolute;
+            width: 20px;
+            height: 80px;
+            background: rgba(255, 87, 34, 0.4);
+            top: 60px;
+        }
+        .arrow {
+            position: absolute;
+            width: 100px;
+            height: 2px;
+            background: #666;
+            top: 100px;
+        }
+        .arrow::after {
+            content: '';
+            position: absolute;
+            right: -5px;
+            top: -4px;
+            width: 10px;
+            height: 10px;
+            border-top: 2px solid #666;
+            border-right: 2px solid #666;
+            transform: rotate(45deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 时间轴 -->
+        <div class="timeline">
+            <!-- 时间点 -->
+            <div class="time-point" style="left: 0px;"></div>
+            <div class="time-label" style="left: 0px;">t-1</div>
+            
+            <div class="time-point" style="left: 100px;"></div>
+            <div class="time-label" style="left: 100px;">t</div>
+            
+            <div class="time-point" style="left: 200px;"></div>
+            <div class="time-label" style="left: 200px;">t+1</div>
+            
+            <div class="time-point" style="left: 300px;"></div>
+            <div class="time-label" style="left: 300px;">t+2</div>
+            
+            <div class="time-point" style="left: 400px;"></div>
+            <div class="time-label" style="left: 400px;">t+3</div>
+            
+            <div class="time-point" style="left: 500px;"></div>
+            <div class="time-label" style="left: 500px;">t+4</div>
+        </div>
+
+        <!-- 滑动窗口 -->
+        <div class="window" style="left: 50px; width: 200px;">
+            <div style="text-align: center; margin-top: -25px;">输入窗口</div>
+        </div>
+
+        <!-- 预测结果 -->
+        <div class="prediction" style="left: 150px; width: 300px;">
+            <div style="text-align: center; margin-top: -25px;">预测轨迹</div>
+        </div>
+
+        <!-- 实际执行 -->
+        <div class="execution" style="left: 150px;">
+            <div style="text-align: center; margin-top: -25px;">执行</div>
+        </div>
+
+        <!-- 箭头指示下一个窗口 -->
+        <div class="arrow" style="left: 250px;"></div>
+        <div class="window" style="left: 150px; width: 200px; border-style: dotted; opacity: 0.5;">
+            <div style="text-align: center; margin-top: -25px;">下一个输入窗口</div>
+        </div>
+
+        <!-- 说明文字 -->
+        <div style="position: absolute; top: 280px; left: 50px;">
+            <p>1. 输入窗口包含(t-1, t, t+1)三个时间步的状态</p>
+            <p>2. 模型预测未来多个时间步的轨迹</p>
+            <p>3. 只执行第一个预测步骤</p>
+            <p>4. 窗口向前滑动，重复过程</p>
+        </div>
+    </div>
+</body>
+</html>

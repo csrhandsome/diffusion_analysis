@@ -1,44 +1,37 @@
 import os
 import cv2
-from util.pose_transform_util import *
+import torch
+import fnmatch
+import numpy as np
 from torchvision import transforms
-from diffusion.model.vision.resnet_visionencoder import *
+from diffusion.model.vision.resnet_visionencoder import get_resnet,replace_bn_with_gn
 from data.global_data import *
 from pathlib import Path
-from data_analysis.load_data.load_depth_data import *
+from data_analysis.load_data.load_depth_data import load_depth_data
 
 
-def load_video_data(first_dir= 'data/drawCircle',weights=None): 
+def load_video_data(first_dir= 'data/drawCircle',weights=None,return_feature=True): 
     # 加载resnet18模型
-    # vision_encoder = get_resnet('resnet18',weights='r3m')
-    vision_encoder = get_resnet('resnet18',weights=weights)
+    vision_encoder = get_resnet('resnet18',weights=weights)# weights='r3m' 要求输入为(C, H, W)
     vision_encoder = replace_bn_with_gn(vision_encoder)# return nn.Module 要输入numpy.array
-    data=dict()
-    timestamp_dict=dict()
-    data['Video']=None
-    timestamp_dict['Video']=None
-    first_filenames=os.listdir(first_dir)
-    for filename1 in first_filenames:
-        if filename1.endswith('__MACOSX'):
-            continue
-        else:
-            second_dir=os.path.join(first_dir,filename1)
-            second_filenames=os.listdir(second_dir)
-            for filename2 in second_filenames:
-                filepath=os.path.join(second_dir,filename2)
-                if filename2.endswith('RGB.mp4'):
-                    frames,timestamp=video_to_frame(filepath)# shape: [1, num_frames, channels, height, width] torch.tensor]
-                    frames=frames.reshape(frames.shape[0]*frames.shape[1],3,256,192)
-                    feature=vision_encoder(frames)# feature shape: torch.Size([num_frames, 512])
-                    feature=feature.detach().numpy()# 后续要作为model的globalcond,所以要转为numpy.array,若不转则使用torch.cat
-                    if data['Video'] is None:
-                        data['Video']=feature
-                        timestamp_dict['Video']=timestamp
-                    else:
-                        #data['Video']=torch.cat((data['Video'],feature),dim=0)
-                        data['Video'] = np.concatenate((data['Video'], feature), axis=0)
-                        timestamp_dict['Video']=np.concatenate((timestamp_dict['Video'],timestamp))
-    return data,timestamp_dict
+    Video=None
+    for root, dirs, files in os.walk(first_dir):
+        if "__MACOSX" in dirs:
+            dirs.remove("__MACOSX") # 跳过__MACOSX目录
+        for file in files:
+            if file == 'RGB.mp4':
+                file_path = os.path.join(root, file)
+                frames = video_to_frames_new(file_path) # 形状:[num_frames,256,192,3]
+                frames = frames.permute(0,3,1,2)# 改为resnet需要的形状 [num_frames,3,256,192]，该行可注释
+                if return_feature:
+                    frames = vision_encoder(frames) # feature shape: torch.Size([num_frames, 512])
+                    frames = frames.detach().numpy() # 后续要作为model的globalcond,所以要转为numpy.array,若不转则使用torch.cat
+                if Video is None:
+                    Video = frames
+                else:
+                    #data['Video']=torch.cat((data['Video'],feature),dim=0)
+                    Video = np.concatenate((Video, frames), axis=0)
+    return Video
 
 
 def select_cap(video_path):
@@ -100,7 +93,7 @@ def video_to_frame(video_path, num_frames=10, height=256, width=192)-> torch.Ten
     timestamps=np.array(timestamps)
     return frames,timestamps
 
-def video_to_frame_new(video_path, num_frames=10, height=256, width=192)-> torch.Tensor:
+def video_to_frames_new(video_path, num_frames=10, height=256, width=192)-> torch.Tensor:
     video_path = str(Path(video_path))# 确保路径无误
     # 打开视频文件
     #根据select_cap函数选出的backend
@@ -144,5 +137,4 @@ def video_to_frame_new(video_path, num_frames=10, height=256, width=192)-> torch
     frames = torch.stack(frames)# shape: [num_frames, channels, height, width]
     # 添加batch维度
     frames = frames.permute(0, 2, 3, 1)# 形状:[num_frames,256,192,3] shape:[num_frames,height,width,channels]
-    timestamps=np.array(timestamps)
-    return frames,timestamps
+    return frames

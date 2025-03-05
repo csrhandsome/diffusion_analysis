@@ -1,33 +1,24 @@
 import os
-import pandas as pd
 import numpy as np
-from util.audio_util import *
+import fnmatch
+from util.audio_util import read_audio_target_freq,get_audio_timestamps
 
-def load_audio_data(first_dir= 'data/drawCircle'): 
-    data=dict()
-    timestamp_dict=dict()
-    first_filenames=os.listdir(first_dir)
-    data['Audio']=None
-    timestamp_dict['Audio']=None
-    for filename1 in first_filenames:
-        if filename1.endswith('__MACOSX'):
-            continue
-        else:
-            second_dir=os.path.join(first_dir,filename1)
-            second_filenames=os.listdir(second_dir)
-            for filename2 in second_filenames:
-                filepath=os.path.join(second_dir,filename2)
-                if filename2.endswith('Audio.m4a'):
-                    y, sr=read_audio_target_freq(filepath,target_freq=30)
+def load_audio_data(first_dir= 'data/drawCircle',target_freq=29): 
+    Audio=None
+    for root, dirs, files in os.walk(first_dir):
+        if "__MACOSX" in dirs:
+            dirs.remove("__MACOSX") # 跳过__MACOSX目录
+        for file in files:
+            if file == 'Audio.m4a':
+                    file_path = os.path.join(root, file)
+                    y, sr=read_audio_target_freq(file_path,target_freq=target_freq)
                     AudioData=np.array(y)# 转换为numpy
-                    timestamp=get_audio_timestamps(y,sr)# timestamp长度和AudioData长度相同
-                    if data['Audio'] is None:
-                        data['Audio']=AudioData
-                        timestamp_dict['Audio']=timestamp
+                    # timestamp=get_audio_timestamps(y,sr)# timestamp长度和AudioData长度相同
+                    if Audio is None:
+                        Audio = AudioData
                     else:
-                        data['Audio']=np.concatenate((data['Audio'],AudioData))
-                        timestamp_dict['Audio']=np.concatenate((timestamp_dict['Audio'],timestamp))
-    return data
+                        Audio = np.concatenate((Audio,AudioData))
+    return Audio
 
 
 

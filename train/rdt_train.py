@@ -21,7 +21,7 @@ from diffusion.model.diffusion.ema_model import EMAModel
 from diffusion.model.multimodal_encoder.siglip_encoder import SiglipVisionTower
 from diffusion.model.multimodal_encoder.t5_encoder import T5Embedder
 from runner.rdt_runner import RDTRunner
-from data_analysis.dataset.rdt_dataset import DataCollatorForVLAConsumerDataset, VLAConsumerDataset
+from train.consumer_dataset import DataCollatorForVLAConsumerDataset, VLAConsumerDataset
 from train.sample import log_sample_res
 
 
@@ -61,9 +61,7 @@ def train(args, logger):
     # 默认是data/config.yaml
     with open(args.config_path, "r") as fp:
         config = yaml.safe_load(fp)
-
     logging_dir = Path(args.output_dir, args.logging_dir)
-
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
     accelerator = Accelerator(
         deepspeed_plugin=DeepSpeedPlugin(

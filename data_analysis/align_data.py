@@ -166,25 +166,26 @@ def align_multi_modal_data_by_shortest_segments(data_dict, timestamps_dict, gap_
 
 
 
-def simple_align(data_dict, timestamps_dict, gap_threshold=1.0):
-    # 根据值的长度找到最大长度
-    max_length = max(v.shape[0] for v in data_dict.values())
-    # 对每个数据进行填充
-    for k in data_dict:
-        cur_length = data_dict[k].shape[0]
+def simple_align(data_list, gap_threshold=1.0):
+    # 找到最大长度
+    max_length = max(data.shape[0] for data in data_list if data is not None)
+    
+    # 对齐数据
+    aligned_data = []
+    
+    for data in data_list:
+        if data is None:
+            aligned_data.append(None)
+            continue
+            
+        cur_length = data.shape[0]
         if cur_length < max_length:
             # 为每个维度指定填充
             pad_width = [(0, max_length-cur_length)]  # 第一维的填充
-            for _ in range(len(data_dict[k].shape) - 1):  # 其他维度不填充
+            for _ in range(len(data.shape) - 1):  # 其他维度不填充
                 pad_width.append((0, 0))
+            aligned_data.append(np.pad(data, pad_width=pad_width, mode='edge'))
+        else:
+            aligned_data.append(data)
             
-            data_dict[k] = np.pad(data_dict[k], 
-                                 pad_width=pad_width,
-                                 mode='edge')
-    # 采用最长的数据的时间戳
-    for k, v in timestamps_dict.items():
-        if v.shape[0] == max_length:
-            data_dict["timestamp"] = v
-            break
-    
-    return data_dict
+    return aligned_data
