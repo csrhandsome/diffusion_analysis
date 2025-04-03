@@ -167,6 +167,8 @@ def align_multi_modal_data_by_shortest_segments(data_dict, timestamps_dict, gap_
 
 
 def simple_align(data_list, gap_threshold=1.0):
+    data_list = [np.array(data) if data is not None else None for data in data_list]
+
     # 找到最大长度
     max_length = max(data.shape[0] for data in data_list if data is not None)
     

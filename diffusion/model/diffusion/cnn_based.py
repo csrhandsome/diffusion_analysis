@@ -98,9 +98,9 @@ class ConditionalResidualBlock1D(nn.Module):
             out_channels,
             cond_dim,
             kernel_size=3,
-            n_groups=8):
+            n_groups=8,dtype=torch.bfloat16):
         super().__init__()
-
+        self.dtype = dtype
         self.blocks = nn.ModuleList([
             Conv1dBlock(in_channels, out_channels, kernel_size, n_groups=n_groups),
             Conv1dBlock(out_channels, out_channels, kernel_size, n_groups=n_groups),
@@ -132,7 +132,7 @@ class ConditionalResidualBlock1D(nn.Module):
         out = self.blocks[0](x)
         
         # 步骤2: 条件编码，生成调制参数
-        embed = self.cond_encoder(cond)
+        embed = self.cond_encoder(cond.to(dtype=self.dtype))
         embed = embed.reshape(embed.shape[0], 2, self.out_channels, 1)
         scale = embed[:,0,...]  # 缩放参数
         bias = embed[:,1,...]   # 偏置参数
@@ -154,7 +154,8 @@ class ConditionalUnet1D(nn.Module):
         diffusion_step_embed_dim=256,
         down_dims=[256,512,1024],
         kernel_size=5,
-        n_groups=8
+        n_groups=8,
+        dtype=torch.bfloat16
         ):
         """
         input_dim: Dim of actions.输入维度
@@ -168,6 +169,7 @@ class ConditionalUnet1D(nn.Module):
         """
 
         super().__init__()
+        self.dtype = dtype
         all_dims = [input_dim] + list(down_dims)
         start_dim = down_dims[0]
 
@@ -185,11 +187,11 @@ class ConditionalUnet1D(nn.Module):
         self.mid_modules = nn.ModuleList([# 中间层塞里两个残差块
             ConditionalResidualBlock1D(
                 mid_dim, mid_dim, cond_dim=cond_dim,
-                kernel_size=kernel_size, n_groups=n_groups
+                kernel_size=kernel_size, n_groups=n_groups, dtype=dtype
             ),
             ConditionalResidualBlock1D(
                 mid_dim, mid_dim, cond_dim=cond_dim,
-                kernel_size=kernel_size, n_groups=n_groups
+                kernel_size=kernel_size, n_groups=n_groups, dtype=dtype
             ),
         ])
 
@@ -199,10 +201,10 @@ class ConditionalUnet1D(nn.Module):
             down_modules.append(nn.ModuleList([# 一个一个塞
                 ConditionalResidualBlock1D(
                     dim_in, dim_out, cond_dim=cond_dim,
-                    kernel_size=kernel_size, n_groups=n_groups),
+                    kernel_size=kernel_size, n_groups=n_groups, dtype=dtype),
                 ConditionalResidualBlock1D(
                     dim_out, dim_out, cond_dim=cond_dim,
-                    kernel_size=kernel_size, n_groups=n_groups),
+                    kernel_size=kernel_size, n_groups=n_groups, dtype=dtype),
                 Downsample1d(dim_out) if not is_last else nn.Identity()# 下采样
             ]))
 
@@ -212,10 +214,10 @@ class ConditionalUnet1D(nn.Module):
             up_modules.append(nn.ModuleList([
                 ConditionalResidualBlock1D(
                     dim_out*2, dim_in, cond_dim=cond_dim,
-                    kernel_size=kernel_size, n_groups=n_groups),
+                    kernel_size=kernel_size, n_groups=n_groups, dtype=dtype),
                 ConditionalResidualBlock1D(
                     dim_in, dim_in, cond_dim=cond_dim,
-                    kernel_size=kernel_size, n_groups=n_groups),
+                    kernel_size=kernel_size, n_groups=n_groups, dtype=dtype),
                 Upsample1d(dim_in) if not is_last else nn.Identity()# 上采样
             ]))
 
@@ -243,6 +245,11 @@ class ConditionalUnet1D(nn.Module):
         global_cond: (B,global_cond_dim)
         output: (B,T,input_dim)
         """
+        # 转换数据类型
+        sample = sample.to(dtype=self.dtype)
+        if global_cond is not None:
+            global_cond = global_cond.to(dtype=self.dtype)
+            
         # (B,T,C)
         sample = sample.moveaxis(-1,-2)
         # (B,C,T)
@@ -259,6 +266,7 @@ class ConditionalUnet1D(nn.Module):
         timesteps = timesteps.expand(sample.shape[0])
 
         global_feature = self.diffusion_step_encoder(timesteps)# 这里的timesteps简单线性变换后作为了cond的一部分
+        global_feature = global_feature.to(dtype=self.dtype)
 
         if global_cond is not None:
             global_feature = torch.cat([

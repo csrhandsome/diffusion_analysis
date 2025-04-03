@@ -33,7 +33,7 @@ class RDTRunner(
             img_pos_embed_config=img_pos_embed_config,
             dtype=dtype,
         )
-        # Create adpators for various conditional inputs
+        #   init data 后续要添加force的adapor
         #   lang_adaptor: mlp2x_gelu
         #   img_adaptor: mlp2x_gelu
         #   state_adaptor: mlp3x_gelu
@@ -53,7 +53,6 @@ class RDTRunner(
             in_features=state_token_dim * 2, # state + state mask (indicator) 在predict_action()中传入的就是cat过的，就是*2的dimension
             out_features=hidden_size
         )
-        
         # Create the noise scheduler
         noise_scheduler_config = config['noise_scheduler']
         self.noise_scheduler = DDPMScheduler(
@@ -145,7 +144,9 @@ class RDTRunner(
         self.noise_scheduler_sample.set_timesteps(self.num_inference_timesteps)
         
         for t in self.noise_scheduler_sample.timesteps:
+            # action + mask → 嵌入 → +state
             # Prepare state-action trajectory
+            # 推理的时候mask只需要当前时间步
             action_traj = torch.cat([noisy_action, action_mask], dim=2)
             action_traj = self.state_adaptor(action_traj)
             state_action_traj = torch.cat([state_traj, action_traj], dim=1)
@@ -198,11 +199,12 @@ class RDTRunner(
         # (this is the forward diffusion process)
         noisy_action = self.noise_scheduler.add_noise(
             action_gt, noise, timesteps)
-        
+        # state + action → +mask → 嵌入
         # Concatenate the state and action tokens to form the input sequence
         state_action_traj = torch.cat([state_tokens, noisy_action], dim=1)
         # Append the action mask to the input sequence
         action_mask = action_mask.expand(-1, state_action_traj.shape[1], -1)
+        # 训练的时候mask要扩散到所有的时间步
         state_action_traj = torch.cat([state_action_traj, action_mask], dim=2)
         # Align the dimension with the hidden size
         lang_cond, img_cond, state_action_traj = self.adapt_conditions(
@@ -211,7 +213,6 @@ class RDTRunner(
         pred = self.model(state_action_traj, ctrl_freqs, 
                           timesteps, lang_cond, img_cond, 
                           lang_mask=lang_attn_mask)
-
         pred_type = self.prediction_type 
         if pred_type == 'epsilon':# epsilon是预测的噪声
             target = noise

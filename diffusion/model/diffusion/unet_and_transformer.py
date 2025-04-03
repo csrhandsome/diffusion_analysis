@@ -177,3 +177,40 @@ class UNetModel(nn.Module):
 
 def create_unet():
     return
+
+if __name__ == "__main__":
+    from omegaconf import OmegaConf
+    
+    # Dummy configuration
+    cfg_dict = {
+        "model": {
+            "d_x": 3,
+            "d_model": 128,
+            "nblocks": 3,
+            "resblock_dropout": 0.1,
+            "transformer_num_heads": 4,
+            "transformer_dim_head": 32,
+            "transformer_dropout": 0.1,
+            "transformer_depth": 2,
+            "transformer_mult_ff": 4,
+            "context_dim": 64,
+            "use_position_embedding": True,
+            "scene_model": {
+                "name": "PointNet2"
+            },
+            "freeze_scene_model": False
+        }
+    }
+    cfg = OmegaConf.create(cfg_dict)
+    
+    # Create dummy inputs
+    x_t = torch.randn(2, 10, cfg.model.d_x)  # Batch size 2, sequence length 10, input dimension d_x
+    ts = torch.tensor([0, 1])  # Timesteps
+    cond = torch.randn(2, 10, cfg.model.context_dim)  # Condition feature
+    
+    # Instantiate UNetModel
+    model = UNetModel(cfg)
+    
+    # Forward pass
+    output = model(x_t, ts, cond)
+    print(output.shape)

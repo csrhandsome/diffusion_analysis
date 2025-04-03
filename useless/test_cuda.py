@@ -1,5 +1,9 @@
 import torch
 def test_cuda():
+   torch.cuda.empty_cache()
+   print(torch.cuda.nccl.version())
+   print(torch.version.cuda) 
+   print(f'PyTorch version: {torch.__version__}')
     # 检查 CUDA 是否可用
    print(f'CUDA is available: {torch.cuda.is_available()}')
    # 检查当前使用的设备

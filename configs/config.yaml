@@ -7,8 +7,8 @@ model:
   img_adaptor: mlp2x_gelu
   state_adaptor: mlp3x_gelu
   all_cond_adaptor: mlp4x_gelu
-  lang_token_dim: 4096
-  img_token_dim: 1152
+  lang_token_dim: 768 # 修改为T5-base编码器实际输出维度,之前大的模型的输出维度是4096
+  img_token_dim: 768  # 修改为siglip-base编码器实际输出维度,之前大的模型的输出维度是1152
   # Dim of action or proprioception vector
   # A `state` refers to an action or a proprioception vector
   # state的维度有待商榷，无法确定夹爪的state
@@ -75,7 +75,8 @@ dataset:
   lowdim_obs_dim: 2
   obs_dim: 514  # vision_feature_dim + lowdim_obs_dim
   zip_data_path: "data/pusht_cchi_v7_replay.zarr.zip"
-
+  # The path to the buffer (at least 400GB)
+  buf_path: /buffer
 # 训练配置
 training:
   device: "cuda"
@@ -99,7 +100,7 @@ common:
   # The number of future actions to predict
   action_chunk_size: 64
   # The number of cameras to be used in the model
-  num_cameras: 3
+  num_cameras: 2
   # Dimension for state/action, we use the same space for both state and action 同一个空间!!!!
   # This MUST be equal to configs/state_vec.py
   state_dim: 128

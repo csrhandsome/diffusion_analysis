@@ -9,9 +9,9 @@ export VISION_ENCODER_NAME="google/siglip-so400m-patch14-384"
 export OUTPUT_DIR="./checkpoints/rdt-finetune-1b-sim"
 export CFLAGS="-I/usr/include"
 export LDFLAGS="-L/usr/lib/x86_64-linux-gnu"
-export CUTLASS_PATH="/data/lingxuan/cutlass"
+export CUTLASS_PATH="~/cutlass"
 
-export WANDB_PROJECT="robotic_diffusion_transformer"
+export WANDB_PROJECT="rdt_train"
 
 if [ ! -d "$OUTPUT_DIR" ]; then
     mkdir "$OUTPUT_DIR"

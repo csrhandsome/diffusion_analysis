@@ -9,8 +9,8 @@ import numpy as np
 
 from data.state_vec import STATE_VEC_IDX_MAPPING
 
-
-class MagiclawVLADataset:
+# vla_dataset-->producer-->RAM-->consumer-->hdf5_vla_dataset
+class MagiclawVLADataset:# hdf5_vla_dataset
     """
     This class is used to sample episodes from the embododiment dataset
     stored in HDF5.
@@ -66,14 +66,14 @@ class MagiclawVLADataset:
                 file_path = np.random.choice(self.file_paths, p=self.episode_sample_weights)
             else:
                 file_path = self.file_paths[index]
-            valid, sample = self.parse_hdf5_file(file_path) \
+            valid, sample = self.parse_local_file(file_path) \
                 if not state_only else self.parse_hdf5_file_state_only(file_path)
             if valid:
                 return sample
             else:
                 index = np.random.randint(0, len(self.file_paths))
     
-    def parse_hdf5_file(self, file_path):
+    def parse_local_file(self, file_path):
         """[Modify] Parse a hdf5 file to generate a training sample at
             a random timestep.
 

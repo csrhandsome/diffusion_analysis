@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import argparse
 import os
-from train.rdt_train import train
-
+# from train.rdt_train import train
+from train.unet_train import train
 from accelerate.logging import get_logger
 
 
@@ -44,7 +44,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--load_from_hdf5",
         action="store_true",
-        default=False,
+        default=True,# 本地读取方式
         help=(
             "Whether to load the dataset directly from HDF5 files. "
             "If False, the dataset will be loaded using producer-consumer pattern, "

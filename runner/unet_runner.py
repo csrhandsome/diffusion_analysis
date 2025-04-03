@@ -19,31 +19,47 @@ class UNETRunner(
         nn.Module,
         CompatiblePyTorchModelHubMixin
     ):
-    def __init__(self, action_dim, pred_horizon,config, n_obs_steps,
-                 img_dim, state_dim, 
+    def __init__(self, action_dim, pred_horizon,config,
+                 img_dim, lang_dim, state_dim, max_lang_cond_len,
                  img_cond_len,obs_as_global_cond=True,dtype=torch.bfloat16):
+        # 首先调用父类的__init__方法
+        super(UNETRunner, self).__init__()
+        
         # init model
         self.pred_horizon,self.img_cond_len = pred_horizon,img_cond_len
         self.pretrained = True
         self.obs_as_global_cond = obs_as_global_cond
+        self.action_dim = action_dim
         noise_scheduler_config = config['noise_scheduler']
-        input_dim = action_dim + state_dim + img_dim
+        self.num_train_timesteps = noise_scheduler_config['num_train_timesteps']
+        self.num_inference_timesteps = noise_scheduler_config['num_inference_timesteps']
+        self.prediction_type = noise_scheduler_config['prediction_type']
         global_cond_dim = None
         # 有 n_obs_steps 个历史观测步，模型需要将所有时间步的特征 拼接成一个长向量
+        # obs_as_global_cond为false的时候没有写input_dim是什么
         if obs_as_global_cond:# 暂定为True,因为要输入输出是一样的
-            input_dim = action_dim
-            global_cond_dim = (state_dim + img_dim)*n_obs_steps
+            self.input_dim = action_dim
+            # state只保留一个最新的
+            # 下面这个会爆内存
+            # global_cond_dim = img_dim*img_cond_len+state_dim*1+lan_dim*max_lang_cond_len
+            
+            # 修改为更合理的计算方式
+            # lang_token只保留最后一个token的输出，直接用hidden_size作为语言特征维度
+            # 暂时都变成hidden_size
+            global_cond_dim = 3*config['rdt']['hidden_size']
+            print(f"Global condition dimension: {global_cond_dim}")
+        # 修改unet的输入维度
         self.model = ConditionalUnet1D(
-            input_dim=input_dim,
-            local_cond_dim=None,
+            input_dim=self.input_dim,
             global_cond_dim=global_cond_dim,
             diffusion_step_embed_dim=256,
-            down_dims=[256,512,1024],
+            down_dims=[128,256,512],
             kernel_size=5,
-            n_groups=8
+            n_groups=8,
+            dtype=dtype
         )
         self.device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        noise_scheduler=DDPMScheduler(num_train_timesteps=noise_scheduler_config['num_train_timesteps'],
+        self.noise_scheduler=DDPMScheduler(num_train_timesteps=noise_scheduler_config['num_train_timesteps'],
                                     clip_sample=True,
                                     prediction_type=noise_scheduler_config['prediction_type'],
                                     beta_schedule=noise_scheduler_config['beta_schedule'])
@@ -55,20 +71,24 @@ class UNETRunner(
                 beta_schedule=noise_scheduler_config['beta_schedule'],
                 prediction_type=noise_scheduler_config['prediction_type'],
             )
-        self.lr_scheduler = get_scheduler(name='cosine',
-                                        optimizer=self.optimizer,
-                                        num_warmup_steps=500,
-                                        num_training_steps=len(self.dataloader))
         self.prediction_type = noise_scheduler_config['prediction_type']
         print(f'model created')
         
-        # init data
+        # init data 后续要添加force的adapor
+        #   lang_adaptor: mlp2x_gelu
+        #   img_adaptor: mlp2x_gelu
+        #   state_adaptor: mlp3x_gelu
         self.hidden_size = config['rdt']['hidden_size']
-        self.dataloader,self.dataset = create_MagiClaw_dataloader()
+        self.lang_adaptor = self.build_condition_adapter(
+            config['lang_adaptor'], 
+            in_features = lang_dim, 
+            out_features = self.hidden_size
+        )
         self.img_adaptor = self.build_condition_adapter(
             config['img_adaptor'], 
             in_features = img_dim, 
-            out_features = self.hidden_size)
+            out_features = self.hidden_size
+        )
         action_mask_dim=action_dim
         self.state_adaptor = self.build_condition_adapter(
             config['state_adaptor'], 
@@ -105,7 +125,7 @@ class UNETRunner(
 
         return projector
 
-    def adapt_conditions(self, img_tokens, state_tokens,action_mask):
+    def adapt_conditions(self, lang_tokens,img_tokens, state_tokens,action_mask):
         '''
         将语言、图像和状态的条件输入通过适配器映射到统一的隐藏空间
         lang_tokens: (batch_size, lang_len, lang_token_dim)
@@ -115,13 +135,15 @@ class UNETRunner(
             indicating the valid action dimensions.
         return: adpated (..., hidden_size) for all input tokens
         '''
+        adpated_lang = self.lang_adaptor(lang_tokens)
         adpated_img = self.img_adaptor(img_tokens)
         adpated_state = self.state_adaptor(state_tokens)
+        # 暂时不要将action_mask转换嵌入向量
         adpated_action_mask = self.state_adaptor(action_mask)# 试着共用一下state_adaptor,毕竟可能在同一个空间
-        return adpated_img, adpated_state, adpated_action_mask
+        return adpated_lang, adpated_img, adpated_state
     
-    def conditional_sample(self,  img_cond, 
-                        state_traj, action_mask, ctrl_freqs):
+    def conditional_sample(self, lang_cond, lang_attn_mask, img_cond, 
+                           state_traj, action_mask, ctrl_freqs):
         '''
         生成action
         lang_cond: language conditional data, (batch_size, lang_len, hidden_size).
@@ -149,10 +171,20 @@ class UNETRunner(
             # Prepare state-action trajectory
             action_traj = noisy_action
             action_traj = self.state_adaptor(action_traj)
-            img_cond, state_cond, action_mask_cond = self.adapt_conditions(
-                img_cond, state_traj, action_mask)# (B,img_len,hidden_size),(B,1,hidden_size),(B,1,hidden_size)
-            # Predict the model output t不行就不unsqueeze
-            global_cond = torch.cat([img_cond, state_cond, action_mask_cond], dim=1)# 三个cond
+            adpated_lang, adpated_img, adpated_state = self.adapt_conditions(
+            lang_cond,img_cond, state_traj,action_mask)# (B,img_len,hidden_size),(B,1,hidden_size),(B,1,hidden_size)
+            
+            # 使用平均池化将3D条件张量转换为2D
+            # 对语言条件进行平均池化，从(B,lang_len,hidden_size)变为(B,hidden_size)
+            adpated_lang = torch.mean(adpated_lang, dim=1)
+            # 图像条件平均池化，从(B,img_len,hidden_size)变为(B,hidden_size)
+            adpated_img = torch.mean(adpated_img, dim=1)
+            # 状态条件平均池化，从(B,1,hidden_size)变为(B,hidden_size)
+            adpated_state = torch.mean(adpated_state, dim=1)
+            
+            # 在特征维度上拼接所有平均池化后的条件
+            global_cond = torch.cat([adpated_lang, adpated_img, adpated_state], dim=1)
+            
             model_output = self.model(noisy_action, t, global_cond=global_cond)
             # Compute previous actions: x_t -> x_t-1
             noisy_action = self.noise_scheduler_sample.step(
@@ -165,8 +197,9 @@ class UNETRunner(
         return noisy_action
     
     # ========= Train  ============
-    def compute_loss(self,img_tokens, state_tokens,
-                     action_gt,action_mask,ctrl_freqs,lang_tokens=None):
+    def compute_loss(self, lang_tokens, lang_attn_mask, img_tokens, 
+                     state_tokens, action_gt, action_mask, ctrl_freqs
+                    ) -> torch.Tensor:
         '''
         把action变成噪声,然后预测噪声
         lang_tokens: (batch_size, lang_len, lang_token_dim)
@@ -193,25 +226,33 @@ class UNETRunner(
         # 根据每次扩散迭代中的噪声幅度向action添加噪声，使其变模糊（这是前向扩散过程）
         noisy_action = self.noise_scheduler.add_noise(
             action_gt, noise, timesteps)
-        
         # ======global_cond的处理======
         if self.obs_as_global_cond:
-            img_cond, state_cond, action_mask_cond = self.adapt_conditions(
-                img_tokens, state_tokens,action_mask)# (B,img_len,hidden_size),(B,1,hidden_size),(B,1,hidden_size)
+            adpated_lang, adpated_img, adpated_state = self.adapt_conditions(
+            lang_tokens,img_tokens, state_tokens,action_mask)# (B,img_len,hidden_size),(B,1,hidden_size),(B,1,hidden_size)
             
-            global_cond = torch.cat([img_cond, state_cond, action_mask_cond], dim=1)# 三个cond
+            # 使用平均池化将3D条件张量转换为2D
+            # 对语言条件进行平均池化，从(B,lang_len,hidden_size)变为(B,hidden_size)
+            adpated_lang = torch.mean(adpated_lang, dim=1)
+            # 图像条件平均池化，从(B,img_len,hidden_size)变为(B,hidden_size)
+            adpated_img = torch.mean(adpated_img, dim=1)
+            # 状态条件平均池化，从(B,1,hidden_size)变为(B,hidden_size)
+            adpated_state = torch.mean(adpated_state, dim=1)
+            
+            # 在特征维度上拼接所有平均池化后的条件
+            global_cond = torch.cat([adpated_lang, adpated_img, adpated_state], dim=1)
             
             pred = self.model(noisy_action, timesteps, global_cond=global_cond)
         else:# 局部条件情况 将cond_data和action合并
             # 合并state和action，形成一个大的state_action_traj
             state_action_traj = torch.cat([state_tokens, noisy_action], dim=1)
+            adpated_lang, adpated_img, state_action_traj= self.adapt_conditions(
+            lang_tokens,img_tokens, state_action_traj,action_mask)# (B,img_len,hidden_size),(B,1,hidden_size),(B,1,hidden_size)
             # Append the action mask to the input sequence
             action_mask = action_mask.expand(-1, state_action_traj.shape[1], -1)
-            cond_data = torch.cat([state_action_traj, action_mask, img_cond], dim=2)
-
+            cond_data = torch.cat([state_action_traj, action_mask, adpated_lang, adpated_img], dim=2)
             # 映射到统一的hidden_size
             cond_data = self.all_cond_adaptor(cond_data)
-
             pred = self.model(cond_data, timesteps, global_cond=None)
         pred_type = self.prediction_type 
         if pred_type == 'epsilon':# epsilon是预测的噪声
@@ -225,8 +266,8 @@ class UNETRunner(
         return loss
     
     # ========= Inference  ============
-    def predict_action(self,img_tokens, state_tokens,
-                       action_mask,ctrl_freqs,lang_tokens=None):
+    def predict_action(self, lang_tokens, lang_attn_mask, img_tokens, state_tokens,
+                       action_mask, ctrl_freqs):
         '''
         lang_tokens: (batch_size, lang_len, lang_token_dim)
         lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
@@ -241,12 +282,12 @@ class UNETRunner(
         '''
         # Prepare the state and conditions
         state_tokens = torch.cat([state_tokens, action_mask], dim=2)
-        img_cond, state_traj = self.adapt_conditions(
-            img_tokens, state_tokens)
+        lang_cond,img_cond, state_traj = self.adapt_conditions(
+            lang_tokens, img_tokens, state_tokens)
         
         # Run sampling
         action_pred = self.conditional_sample(
-            img_cond, 
+            lang_cond, lang_attn_mask, img_cond, 
             state_traj, action_mask, ctrl_freqs,
         )
         

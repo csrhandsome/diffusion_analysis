@@ -137,6 +137,12 @@ def train(args, logger):
         img_cond_len = (config["common"]["img_history_size"] 
                         * config["common"]["num_cameras"] 
                         * vision_encoder.num_patches)
+        # action_dim = 128 (状态/动作维度)
+        # pred_horizon = 64 (预测未来动作数量)
+        # lang_token_dim = 4096 (语言token维度)
+        # img_token_dim = 1152 (图像token维度)
+        # state_token_dim = 128 (状态token维度)
+        # max_lang_cond_len = 1024 (最大语言token长度)
         rdt = RDTRunner(
             action_dim=config["common"]["state_dim"],
             pred_horizon=config["common"]["action_chunk_size"],
@@ -160,7 +166,7 @@ def train(args, logger):
             dtype=weight_dtype,
         )
         
-                                                                       
+    # 训练过程中单独训练和加载                                  
     ema_rdt = copy.deepcopy(rdt)
     ema_model = EMAModel(
         ema_rdt,
@@ -260,6 +266,7 @@ def train(args, logger):
         pin_memory=True,
         persistent_workers=True
     )
+    
     sample_dataloader = torch.utils.data.DataLoader(
         sample_dataset,
         batch_size=args.sample_batch_size,

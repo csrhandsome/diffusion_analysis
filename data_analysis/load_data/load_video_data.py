@@ -1,6 +1,5 @@
 import os
 import cv2
-import torch
 import fnmatch
 import numpy as np
 from torchvision import transforms
@@ -21,15 +20,15 @@ def load_video_data(first_dir= 'data/drawCircle',weights=None,return_feature=Tru
         for file in files:
             if file == 'RGB.mp4':
                 file_path = os.path.join(root, file)
-                frames = video_to_frames_new(file_path) # 形状:[num_frames,256,192,3]
-                frames = frames.permute(0,3,1,2)# 改为resnet需要的形状 [num_frames,3,256,192]，该行可注释
+                frames = video_to_frames_new(file_path,to_tensor=return_feature) # 修改：当return_feature=False时，返回numpy数组格式
                 if return_feature:
+                    frames = frames.permute(0,3,1,2)# 改为resnet需要的形状 [num_frames,3,256,192]，该行可注释 permute只用于张量
                     frames = vision_encoder(frames) # feature shape: torch.Size([num_frames, 512])
                     frames = frames.detach().numpy() # 后续要作为model的globalcond,所以要转为numpy.array,若不转则使用torch.cat
                 if Video is None:
                     Video = frames
                 else:
-                    #data['Video']=torch.cat((data['Video'],feature),dim=0)
+                    # 无论是特征还是图像帧，都使用np.concatenate
                     Video = np.concatenate((Video, frames), axis=0)
     return Video
 
@@ -46,7 +45,8 @@ def select_cap(video_path):
     raise Exception("Could not open video with any backend")
 
 
-def video_to_frame(video_path, num_frames=10, height=256, width=192)-> torch.Tensor:
+def video_to_frame(video_path, num_frames=10, height=256, width=192):
+    import torch
     video_path = str(Path(video_path))# 确保路径无误
     # 打开视频文件
     #根据select_cap函数选出的backend
@@ -93,7 +93,7 @@ def video_to_frame(video_path, num_frames=10, height=256, width=192)-> torch.Ten
     timestamps=np.array(timestamps)
     return frames,timestamps
 
-def video_to_frames_new(video_path, num_frames=10, height=256, width=192)-> torch.Tensor:
+def video_to_frames_new(video_path, num_frames=10, height=256, width=192,to_tensor=False):
     video_path = str(Path(video_path))# 确保路径无误
     # 打开视频文件
     #根据select_cap函数选出的backend
@@ -114,6 +114,7 @@ def video_to_frames_new(video_path, num_frames=10, height=256, width=192)-> torc
         transforms.ToTensor(),  # 将PIL图像转换为tensor，并归一化到[0,1]
     ])
     frames = []
+    raw_frames = []  # 用于存储原始numpy格式的帧
     timestamps = []
     frame_count = 0
     while cap.isOpened():
@@ -123,6 +124,9 @@ def video_to_frames_new(video_path, num_frames=10, height=256, width=192)-> torc
         if frame_count % step == 0 and len(frames) < num_frames:
             # OpenCV读取的是BGR格式，转换为RGB
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # 保存原始numpy格式的帧（已调整大小）
+            resized_frame = cv2.resize(frame, (width, height))
+            raw_frames.append(resized_frame)
             # 转换为tensor并添加到列表
             frame_tensor = transform(frame)
             frames.append(frame_tensor)
@@ -133,8 +137,13 @@ def video_to_frames_new(video_path, num_frames=10, height=256, width=192)-> torc
         if len(frames) == num_frames:
             break
     cap.release()
-    # 堆叠所有帧
-    frames = torch.stack(frames)# shape: [num_frames, channels, height, width]
-    # 添加batch维度
-    frames = frames.permute(0, 2, 3, 1)# 形状:[num_frames,256,192,3] shape:[num_frames,height,width,channels]
-    return frames
+    if to_tensor:
+        # 堆叠所有帧为一个张量
+        import torch
+        frames = torch.stack(frames)# shape: [num_frames, channels, height, width]
+        # 添加batch维度
+        frames = frames.permute(0, 2, 3, 1)# shape:[num_frames,height,width,channels]
+        return frames
+    else:
+        # 返回numpy数组格式的帧，每帧形状为(height, width, 3)
+        return np.stack(raw_frames, axis=0)  # shape: [num_frames, height, width, 3]

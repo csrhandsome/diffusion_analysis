@@ -65,14 +65,14 @@ class MagiclawVLADataset:
             else:
                 episode_path = self.episode_paths[index]
             data_path=os.path.join(self.data_path,episode_path)
-            valid, sample = self.parse_file(data_path) \
+            valid, sample = self.parse_local_file(data_path) \
                 if not state_only else self.parse_file_state_only(data_path)
             if valid:
                 return sample
             else:
                 index = np.random.randint(0, len(self.file_paths))
     
-    def parse_file(self, file_path):
+    def parse_local_file(self, file_path):
         """[Modify] Parse a hdf5 file to generate a training sample at
             a random timestep.
 

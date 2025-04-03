@@ -14,7 +14,7 @@ from PIL import Image
 import transformers
 
 from data_analysis.filelock import FileLock
-from data_analysis.dataset.vla_singlehand_dataset import MagiclawVLADataset
+from data_analysis.dataset.vla_singlehand_dataset import VLADataset
 from train.image_corrupt import image_corrupt
 
 
@@ -73,7 +73,7 @@ def read_dirty_bit(chunk_dir):
             continue
     raise RuntimeError("Failed to read dirty bit.")
 
-
+# vla_dataset-->producer-->RAM-->consumer-->hdf5_vla_dataset
 class VLAConsumerDataset(Dataset):
     """A vision-languange-action Dataset for supervised training.
     This dataset will load data from the buffer directory.
@@ -106,7 +106,7 @@ class VLAConsumerDataset(Dataset):
             if dataset_type == 'pretrain' else 'configs/finetune_datasets.json'
         with open(dataset_names_cfg, 'r') as file:
             DATASET_NAMES = json.load(file)
-        # Create the mapping between dataset name and id
+        # enumerate 只能获取值
         self.dataset_name2id = {name: i for i, name in enumerate(DATASET_NAMES)}
         self.dataset_id2name = {i: name for i, name in enumerate(DATASET_NAMES)}
         
@@ -125,7 +125,7 @@ class VLAConsumerDataset(Dataset):
         self.use_hdf5 = use_hdf5
         self.dataset = None
         if use_hdf5:
-            self.dataset = MagiclawVLADataset()
+            self.dataset = VLADataset()
         self.use_precomp_lang_embed = use_precomp_lang_embed
         if use_precomp_lang_embed:
             self.empty_lang_embed = torch.load("data/empty_lang_embed.pt")
@@ -242,7 +242,7 @@ class VLAConsumerDataset(Dataset):
         while True:
             data_dict = None
             try:
-                if self.use_hdf5:
+                if self.use_hdf5:# 本地读取方式
                     res = self.dataset.get_item()
                     content = res['meta']
                     states = res['state']
@@ -250,19 +250,18 @@ class VLAConsumerDataset(Dataset):
                     state_elem_mask = res['state_indicator']
                     image_metas = [
                         res['cam_high'], res['cam_high_mask'],
-                        res['cam_right_wrist'], res['cam_right_wrist_mask'],
-                        res['cam_left_wrist'], res['cam_left_wrist_mask'],
+                        res['cam_phone'], res['cam_phone_mask'],
                     ]
                     state_std = res['state_std']
                     state_mean = res['state_mean']
                     state_norm = res['state_norm']
-                else:
+                else:# 内存读取方式
                     (content, _, states, _, actions, _, 
                     state_elem_mask, *image_metas, 
                     state_std, state_mean, state_norm) = self._safe_load(index)
                 
                 data_dict = {}
-                data_dict['dataset_name'] = content['dataset_name']
+                data_dict['dataset_name'] = content['dataset_name']# 在meta里面
                 data_dict['data_idx'] = self.dataset_name2id[data_dict['dataset_name']]
                 data_dict['ctrl_freq'] = self.control_freq[data_dict['dataset_name']] \
                     if random.random() > self.cond_mask_prob else 0
@@ -271,6 +270,8 @@ class VLAConsumerDataset(Dataset):
                     states += np.random.normal(
                         0.0, state_std / np.sqrt(10 ** (self.state_noise_snr / 10)), 
                         states.shape)
+                # dataset的mean
+                # 仔细看看，是嵌套的，而不是data_dict['dataset_name']['state_mean']
                 ds_state_mean = np.array(self.dataset_stat[data_dict['dataset_name']]['state_mean'])
                 ds_state_mean = np.tile(ds_state_mean[None], (states.shape[0], 1))
                 # Randomly mask the states by the mean state

@@ -13,8 +13,9 @@ import tensorflow as tf
 import yaml
 
 from data_analysis.filelock import FileLock
-from data_analysis.dataset.vla_singlehand_dataset import MagiclawVLADataset
+from data_analysis.dataset.ram_vla_dataset import VLADataset
 
+# python -m data_analysis.producer --fill_up --n_workers 4
 
 # Producer does not need GPU
 tf.config.set_visible_devices([], 'GPU')
@@ -163,7 +164,7 @@ def run_producer(seed, num_workers, worker_id, fill_up, clean_dirty, dataset_typ
     (i.e., samples that have been read by the consumer)
     with new samples.
     """
-    vla_dataset = MagiclawVLADataset(seed=seed, dataset_type=dataset_type)
+    vla_dataset = VLADataset(seed=seed, dataset_type=dataset_type)
     chunk_start_idx = worker_id * BUF_NUM_CHUNKS // num_workers
     chunk_end_idx = (worker_id + 1) * BUF_NUM_CHUNKS // num_workers
     if fill_up:
